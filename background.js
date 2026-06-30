@@ -30,7 +30,8 @@ const MAX_CONTEXT_CACHE_ENTRIES = 80;
 const PDF_TEXT_MIN_CHARS = 1600;
 const PDF_EXTRACT_MAX_PAGES = 80;
 const PDF_TEXT_CONTEXT_SOURCE = "PDF 文本抽取（未上传 PDF 文件）+ arXiv 页面元数据";
-const GITHUB_MANIFEST_URL = "https://raw.githubusercontent.com/jiahaozhang6/arXivMate/main/manifest.json";
+const GITHUB_TAGS_FEED_URL = "https://github.com/jiahaozhang6/arXivMate/tags.atom";
+const GITHUB_TAGS_PAGE_URL = "https://github.com/jiahaozhang6/arXivMate/tags";
 const UPDATE_CHECK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 let pdfjsReady = null;
@@ -239,17 +240,19 @@ async function checkForUpdate({ force = false } = {}) {
   }
 
   try {
-    const response = await fetch(`${GITHUB_MANIFEST_URL}?t=${now}`, { cache: "no-store" });
+    const response = await fetch(`${GITHUB_TAGS_FEED_URL}?t=${now}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
-    const remoteManifest = await response.json();
-    const latestVersion = normalizeString(remoteManifest.version);
-    if (!latestVersion) throw new Error("Remote manifest has no version.");
+    const tagFeed = await response.text();
+    const latestTag = findLatestVersionTag(tagFeed);
+    if (!latestTag) throw new Error("GitHub has no semantic version tag.");
+    const latestVersion = tagToVersion(latestTag);
     const result = {
       localVersion,
       latestVersion,
+      latestTag,
       updateAvailable: compareVersions(latestVersion, localVersion) > 0,
       checkedAt: new Date(now).toISOString(),
-      sourceUrl: GITHUB_MANIFEST_URL,
+      sourceUrl: GITHUB_TAGS_PAGE_URL,
       repositoryUrl: "https://github.com/jiahaozhang6/arXivMate",
       error: ""
     };
@@ -259,9 +262,10 @@ async function checkForUpdate({ force = false } = {}) {
     const fallback = {
       localVersion,
       latestVersion: updateCheck?.latestVersion || localVersion,
+      latestTag: updateCheck?.latestTag || versionToTag(updateCheck?.latestVersion || localVersion),
       updateAvailable: updateCheck?.latestVersion ? compareVersions(updateCheck.latestVersion, localVersion) > 0 : false,
       checkedAt: updateCheck?.checkedAt || "",
-      sourceUrl: GITHUB_MANIFEST_URL,
+      sourceUrl: GITHUB_TAGS_PAGE_URL,
       repositoryUrl: "https://github.com/jiahaozhang6/arXivMate",
       error: error.message || String(error)
     };
@@ -1512,8 +1516,8 @@ function normalizeAppearance(value) {
 }
 
 function compareVersions(left, right) {
-  const leftParts = normalizeString(left).split(/[.-]/).map((part) => Number.parseInt(part, 10));
-  const rightParts = normalizeString(right).split(/[.-]/).map((part) => Number.parseInt(part, 10));
+  const leftParts = normalizeVersion(left).split(/[.-]/).map((part) => Number.parseInt(part, 10));
+  const rightParts = normalizeVersion(right).split(/[.-]/).map((part) => Number.parseInt(part, 10));
   const length = Math.max(leftParts.length, rightParts.length);
   for (let index = 0; index < length; index += 1) {
     const leftValue = Number.isFinite(leftParts[index]) ? leftParts[index] : 0;
@@ -1522,6 +1526,34 @@ function compareVersions(left, right) {
     if (leftValue < rightValue) return -1;
   }
   return 0;
+}
+
+function normalizeVersion(value) {
+  return normalizeString(value)
+    .replace(/^refs\/tags\//i, "")
+    .replace(/^v/i, "")
+    .split(/[+-]/)[0];
+}
+
+function versionToTag(version) {
+  const normalized = normalizeVersion(version);
+  return normalized ? `v${normalized}` : "";
+}
+
+function tagToVersion(tag) {
+  return normalizeVersion(tag);
+}
+
+function findLatestVersionTag(tags) {
+  const names = typeof tags === "string"
+    ? [...tags.matchAll(/<title>(v?\d+\.\d+\.\d+(?:[-+][^<]+)?)<\/title>/gi)].map((match) => match[1])
+    : Array.isArray(tags)
+    ? tags.map((tag) => typeof tag === "string" ? tag : tag?.name)
+    : [];
+  return names
+    .map((name) => normalizeString(name))
+    .filter((name) => /^v?\d+\.\d+\.\d+(?:[-+].*)?$/i.test(name))
+    .sort((left, right) => compareVersions(right, left))[0] || "";
 }
 
 function resolveOutputLanguageInstruction(language) {

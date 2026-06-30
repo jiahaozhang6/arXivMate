@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.3 - 2026-06-30
+
+Documentation and release metadata.
+
+- Add the project icon to the README header.
+- Rewrite download, installation, first-use, and update instructions for source-code users.
+- Add recommended GitHub topics and release tag description.
+- Base user update checks on GitHub `vX.Y.Z` tags instead of the `main` branch manifest.
+- Keep public version metadata aligned across `manifest.json`, README, and settings.
+
 ## 0.1.2 - 2026-06-30
 
 Release polish.

@@ -1,18 +1,29 @@
+<p align="center">
+  <img src="./icons/icon-128.png" width="96" height="96" alt="arXivMate icon">
+</p>
+
 # arXivMate
 
-[中文](#中文) | [English](#english)
+<p align="center">
+  <strong>和 arXiv 论文直接对话的本地优先 Chrome 阅读助手。</strong><br>
+  <strong>A local-first Chrome reading assistant for chatting with arXiv papers.</strong>
+</p>
+
+<p align="center">
+  <a href="#中文">中文</a> | <a href="#english">English</a>
+</p>
 
 ## 中文
 
-> 在 arXiv 页面里直接和论文对话，把每日读论文变成可追踪、可复盘的工作流。
+> 打开 arXiv，就能总结、追问、深读 PDF，并把每篇论文的阅读历史留在本地。
 
-arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 论文摘要页或 PDF 页时，它会在右侧打开一个分屏阅读助手，帮助你快速总结论文、深读方法与实验、生成学习卡片，并把每篇论文的对话历史保存在本地。
+arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页或 PDF 页时，它会在右侧打开分屏阅读助手，帮助你快速判断论文价值、深读方法与实验、生成学习卡片，并把每篇论文的对话历史保存到本地。
 
-它不是简单的“摘要按钮”。arXivMate 更像一个轻量研究阅读搭子：它理解当前论文、保留每篇论文的历史对话、支持 DeepSeek/MiniMax/OpenAI-compatible 接口，并参考 [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) 的模型配置、PDF 能力分层、上下文窗口和 paper chat 设计。
+它不是一次性的“摘要按钮”。arXivMate 更像一个轻量研究阅读搭子：它理解当前论文、保留每篇论文的历史对话、支持 DeepSeek/MiniMax/OpenAI-compatible 接口，并参考 [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) 的模型配置、PDF 能力分层、上下文窗口和 paper chat 设计。
 
 ## 当前状态
 
-- 当前版本：`0.1.2`
+- 当前版本：`0.1.3`
 - 安装方式：Chrome 未打包扩展
 - Chrome Web Store：暂未发布
 - 主要语言：支持跟随系统、中文、英文；会同时影响扩展界面和 LLM 输出语言
@@ -34,41 +45,65 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 论文摘要
 - **多模型 Profile**：内置 OpenAI、DeepSeek、MiniMax、Ollama 和自定义 OpenAI-compatible 配置。
 - **中英文界面**：语言设置会同步影响助手面板、设置页、复盘库、popup 和 LLM prompt。
 - **背景主题设置**：助手面板、设置页和复盘库支持跟随系统、浅色、深色和护眼背景。
-- **GitHub 更新提示**：设置页和 popup 会检查 GitHub `main` 是否有更新版本，并提示源码安装用户更新。
+- **GitHub tag 更新提示**：设置页和 popup 会检查最新 `vX.Y.Z` tag，并提示源码安装用户更新。
 - **流式输出**：优先使用 Chat Completions stream；不支持 stream 的接口会退回普通响应。
 - **上下文窗口预算**：估算并显示本次请求的上下文用量，如 `上下文 12k / 128k`。
 - **本地优先**：笔记、历史和正文缓存都保存在 Chrome 本地 storage。
 
-## 截图
+## 推荐标签
 
-截图还没有提交。建议后续补充：
+如果你在 GitHub 上收藏、fork 或二次发布，可以使用这些 topics：
 
-- arXiv 摘要页右侧分屏助手
-- arXiv PDF 页输入框聚焦状态
-- 模型 Profile 设置页
-- 论文复盘库
+`arxiv`, `paper-reading`, `llm`, `chrome-extension`, `deepseek`, `minimax`, `openai-compatible`, `pdf`, `research-tool`, `local-first`
 
-## 快速安装
+一句话描述：
+
+> arXivMate 是一个本地优先的 Chrome 扩展，让你在 arXiv 页面里用 DeepSeek、MiniMax 或 OpenAI-compatible 模型总结、追问、深读 PDF，并保存每篇论文的本地复盘历史。
+
+## 下载与安装
 
 目前 arXivMate 通过 Chrome 的“加载已解压扩展程序”安装。
 
-1. 克隆仓库：
+### 方法一：下载 ZIP
 
-   ```bash
-   git clone https://github.com/jiahaozhang6/arXivMate.git
-   ```
+适合只想使用、不想配置 git 的用户。
 
-2. 打开 Chrome：`chrome://extensions`
-3. 打开右上角 `开发者模式`
-4. 点击 `加载已解压的扩展程序`
-5. 选择刚刚克隆下来的 `arXivMate` 目录
-6. 点击扩展图标，进入设置页，配置模型 Profile
+1. 打开 [arXivMate GitHub 仓库](https://github.com/jiahaozhang6/arXivMate)
+2. 点击绿色 `Code` 按钮
+3. 选择 `Download ZIP`
+4. 解压 ZIP，得到 `arXivMate` 文件夹
+5. 打开 Chrome：`chrome://extensions`
+6. 打开右上角 `开发者模式`
+7. 点击 `加载已解压的扩展程序`
+8. 选择解压后的 `arXivMate` 文件夹
 
-更新代码后，需要在 `chrome://extensions` 里点击 arXivMate 的刷新按钮，并刷新已经打开的 arXiv 页面。
+### 方法二：使用 git clone
+
+适合希望和仓库保持更新、参与开发或提交 PR 的用户。
+
+```bash
+git clone https://github.com/jiahaozhang6/arXivMate.git
+```
+
+然后：
+
+1. 打开 Chrome：`chrome://extensions`
+2. 打开右上角 `开发者模式`
+3. 点击 `加载已解压的扩展程序`
+4. 选择刚刚克隆下来的 `arXivMate` 文件夹
+
+### 第一次使用
+
+1. 点击 Chrome 工具栏中的 arXivMate 图标
+2. 打开 `设置`
+3. 选择或新增模型 Profile
+4. 填写 API Base URL、API Key 和模型名称
+5. 打开任意 arXiv 论文页面，例如 `https://arxiv.org/abs/1706.03762`
+6. 点击页面右下角 `AI` 开始使用
 
 ## 保持更新
 
-如果你是通过 git clone 安装的：
+源码安装的 Chrome 扩展不会像 Chrome Web Store 扩展一样自动更新。推荐使用 git clone 安装，这样更新最简单：
 
 ```bash
 cd arXivMate
@@ -81,7 +116,9 @@ git pull
 2. 点击 arXivMate 卡片上的刷新按钮
 3. 刷新已经打开的 arXiv 页面
 
-arXivMate 也会在设置页和 popup 中检查 GitHub `main` 的最新 `manifest.json` 版本。如果发现新版本，会提示你运行 `git pull` 并重新加载扩展。
+如果你是下载 ZIP 安装的，需要重新下载最新 ZIP、解压并替换原文件夹，然后在 `chrome://extensions` 里重新加载扩展。
+
+arXivMate 的更新提示基于 GitHub release/tag 版本号：插件会读取仓库最新的 `vX.Y.Z` tag，并和本地 `manifest.json` 版本比较。如果发现新版本，会提示你运行 `git pull` 并重新加载扩展。
 
 如果你 fork 了本仓库，可以这样同步上游：
 
@@ -90,6 +127,18 @@ git remote add upstream https://github.com/jiahaozhang6/arXivMate.git
 git fetch upstream
 git merge upstream/main
 ```
+
+## Release Tag 描述
+
+当前推荐 release/tag 描述：
+
+```text
+arXivMate v0.1.3 - local-first arXiv paper chat assistant
+
+This release improves the public README, download/install instructions, and release metadata. arXivMate lets users summarize, ask questions, deep-read PDF text, and keep local per-paper review history directly on arXiv pages using DeepSeek, MiniMax, OpenAI-compatible APIs, Ollama, or custom endpoints.
+```
+
+用户侧更新检查以 GitHub tag 为准。发布新版本时请先更新 `manifest.json` 版本号，再创建同版本 tag，例如 `v0.1.3`。
 
 ## 模型配置
 
@@ -284,7 +333,7 @@ MIT. See [LICENSE](./LICENSE).
 
 ## English
 
-> Chat with arXiv papers directly in the browser, and turn daily paper reading into a searchable, reviewable workflow.
+> Open arXiv, summarize, ask questions, deep-read PDF text, and keep every paper's reading history local.
 
 arXivMate is a local-first Chrome MV3 extension. When you open an arXiv abstract page or PDF page, it opens a split-screen reading assistant on the right side. It helps you summarize a paper, study its method and experiments, generate study cards, and keep a local conversation history for each paper.
 
@@ -292,7 +341,7 @@ It is not just a “summarize this paper” button. arXivMate is designed as a l
 
 ## Status
 
-- Version: `0.1.2`
+- Version: `0.1.3`
 - Installation: unpacked Chrome extension
 - Chrome Web Store: not published yet
 - Language: system default, Chinese, or English; controls both the extension UI and LLM output language
@@ -314,41 +363,65 @@ It is not just a “summarize this paper” button. arXivMate is designed as a l
 - **Multiple model profiles**: built-in profiles for OpenAI, DeepSeek, MiniMax, Ollama, and custom OpenAI-compatible endpoints.
 - **Chinese/English UI**: the language setting applies to the assistant panel, settings page, review library, popup, and LLM prompt.
 - **Theme setting**: the assistant panel, settings page, and review library support system, light, dark, and sepia backgrounds.
-- **GitHub update hint**: the settings page and popup check whether GitHub `main` has a newer version and guide source-install users to update.
+- **GitHub tag update hint**: the settings page and popup check the latest `vX.Y.Z` tag and guide source-install users to update.
 - **Streaming output**: uses Chat Completions streaming when available, with a non-streaming fallback.
 - **Context-window budgeting**: estimates and displays request context usage, such as `context 12k / 128k`.
 - **Local-first storage**: notes, conversations, and extracted text caches are stored in Chrome extension storage.
 
-## Screenshots
+## Recommended Topics
 
-Screenshots have not been added yet. Suggested screenshots:
+If you star, fork, or republish this project, these GitHub topics fit well:
 
-- Right-side split assistant on an arXiv abstract page
-- Input focus state on an arXiv PDF page
-- Model profile settings page
-- Local review library
+`arxiv`, `paper-reading`, `llm`, `chrome-extension`, `deepseek`, `minimax`, `openai-compatible`, `pdf`, `research-tool`, `local-first`
 
-## Quick Install
+One-line description:
+
+> arXivMate is a local-first Chrome extension that lets you summarize, ask questions, deep-read PDF text, and save local review history for arXiv papers with DeepSeek, MiniMax, or OpenAI-compatible models.
+
+## Download And Install
 
 arXivMate is currently installed through Chrome’s “Load unpacked” flow.
 
-1. Clone the repository:
+### Option 1: Download ZIP
 
-   ```bash
-   git clone https://github.com/jiahaozhang6/arXivMate.git
-   ```
+Best for users who want to try the extension without setting up git.
 
-2. Open Chrome: `chrome://extensions`
-3. Enable `Developer mode`
-4. Click `Load unpacked`
-5. Select the cloned `arXivMate` directory
-6. Click the extension icon, open the settings page, and configure a model profile
+1. Open the [arXivMate GitHub repository](https://github.com/jiahaozhang6/arXivMate)
+2. Click the green `Code` button
+3. Choose `Download ZIP`
+4. Unzip it to get an `arXivMate` folder
+5. Open Chrome: `chrome://extensions`
+6. Enable `Developer mode`
+7. Click `Load unpacked`
+8. Select the unzipped `arXivMate` folder
 
-After updating the code, click the reload button on the arXivMate extension card in `chrome://extensions`, then refresh any already-open arXiv pages.
+### Option 2: Use git clone
+
+Best for users who want easy updates, development, or pull requests.
+
+```bash
+git clone https://github.com/jiahaozhang6/arXivMate.git
+```
+
+Then:
+
+1. Open Chrome: `chrome://extensions`
+2. Enable `Developer mode`
+3. Click `Load unpacked`
+4. Select the cloned `arXivMate` folder
+
+### First Use
+
+1. Click the arXivMate icon in the Chrome toolbar
+2. Open `Settings`
+3. Choose or create a model profile
+4. Fill in API Base URL, API key, and model name
+5. Open any arXiv paper, for example `https://arxiv.org/abs/1706.03762`
+6. Click `AI` in the bottom-right corner of the page
 
 ## Staying Updated
 
-If you installed by cloning the repository:
+Source-installed Chrome extensions do not update automatically like Chrome Web Store extensions. The recommended install method is `git clone`, because updates are simple:
 
 ```bash
 cd arXivMate
@@ -361,7 +434,9 @@ Then:
 2. Click reload on the arXivMate extension card
 3. Refresh already-open arXiv pages
 
-arXivMate also checks the latest `manifest.json` version on GitHub `main` from the settings page and popup. If a newer version is available, it prompts you to run `git pull` and reload the extension.
+If you installed from a ZIP file, download the latest ZIP again, unzip it, replace the old folder, and reload the extension in `chrome://extensions`.
+
+arXivMate update hints are based on GitHub release/tag versions. The extension reads the latest `vX.Y.Z` tag and compares it with the local `manifest.json` version. If a newer version is available, it prompts you to run `git pull` and reload the extension.
 
 If you forked this repository, you can sync from upstream:
 
@@ -370,6 +445,18 @@ git remote add upstream https://github.com/jiahaozhang6/arXivMate.git
 git fetch upstream
 git merge upstream/main
 ```
+
+## Release Tag Description
+
+Recommended release/tag description:
+
+```text
+arXivMate v0.1.3 - local-first arXiv paper chat assistant
+
+This release improves the public README, download/install instructions, tag-based update checking, and release metadata. arXivMate lets users summarize, ask questions, deep-read PDF text, and keep local per-paper review history directly on arXiv pages using DeepSeek, MiniMax, OpenAI-compatible APIs, Ollama, or custom endpoints.
+```
+
+User-side update checks are based on GitHub tags. When publishing a new version, update `manifest.json` first, then create a matching tag such as `v0.1.3`.
 
 ## Model Configuration
 
