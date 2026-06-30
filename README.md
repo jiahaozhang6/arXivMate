@@ -57,7 +57,7 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页、
 
 如果你在 GitHub 上收藏、fork 或二次发布，可以使用这些 topics：
 
-`arxiv`, `paper-reading`, `llm`, `chrome-extension`, `deepseek`, `minimax`, `openai-compatible`, `pdf`, `research-tool`, `local-first`
+`arxiv`, `ieee-xplore`, `paper-reading`, `llm`, `chrome-extension`, `deepseek`, `minimax`, `openai-compatible`, `pdf-reader`, `research-tool`, `local-first`
 
 一句话描述：
 
@@ -423,7 +423,7 @@ It is not just a “summarize this paper” button. arXivMate is designed as a l
 
 If you star, fork, or republish this project, these GitHub topics fit well:
 
-`arxiv`, `paper-reading`, `llm`, `chrome-extension`, `deepseek`, `minimax`, `openai-compatible`, `pdf`, `research-tool`, `local-first`
+`arxiv`, `ieee-xplore`, `paper-reading`, `llm`, `chrome-extension`, `deepseek`, `minimax`, `openai-compatible`, `pdf-reader`, `research-tool`, `local-first`
 
 One-line description:
 
