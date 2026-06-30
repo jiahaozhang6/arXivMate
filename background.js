@@ -25,6 +25,7 @@ const PDF_TEXT_CONTEXT_SOURCE = "PDF 文本抽取（未上传 PDF 文件）+ arX
 const GITHUB_RELEASES_API_URL = "https://api.github.com/repos/jiahaozhang6/arXivMate/releases";
 const GITHUB_RELEASES_PAGE_URL = "https://github.com/jiahaozhang6/arXivMate/releases";
 const UPDATE_CHECK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const SETTINGS_MIRROR_KEY = "settingsMirror";
 
 let pdfjsReady = null;
 
@@ -54,7 +55,11 @@ const PROVIDER_PRESETS = {
 chrome.runtime.onInstalled.addListener(async () => {
   const { settings } = await chrome.storage.sync.get("settings");
   if (!settings) {
-    await chrome.storage.sync.set({ settings: createDefaultSettings() });
+    const local = await chrome.storage.local.get(SETTINGS_MIRROR_KEY);
+    const mirror = local[SETTINGS_MIRROR_KEY];
+    await chrome.storage.sync.set({
+      settings: mirror ? normalizeSettings(mirror) : createDefaultSettings()
+    });
   }
 });
 
@@ -217,7 +222,11 @@ async function checkForUpdate({ force = false } = {}) {
 
 async function getSettings() {
   const { settings } = await chrome.storage.sync.get("settings");
-  return normalizeSettings(settings);
+  const local = await chrome.storage.local.get(SETTINGS_MIRROR_KEY);
+  const mirror = local[SETTINGS_MIRROR_KEY];
+  const normalized = normalizeSettings(settings);
+  if (normalized.modelProfiles.length || !mirror) return normalized;
+  return normalizeSettings(mirror);
 }
 
 async function saveSettings(settings) {
@@ -234,7 +243,15 @@ async function saveSettings(settings) {
   }
   await testAllModelProfiles(modelProfiles);
 
-  await chrome.storage.sync.set({ settings: next });
+  const mirrored = {
+    ...next,
+    savedAt: new Date().toISOString(),
+    extensionVersion: chrome.runtime.getManifest().version
+  };
+  await Promise.all([
+    chrome.storage.sync.set({ settings: next }),
+    chrome.storage.local.set({ [SETTINGS_MIRROR_KEY]: mirrored })
+  ]);
   return next;
 }
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.9 - 2026-06-30
+
+Model profile storage fallback.
+
+- Save a local `settingsMirror` copy whenever settings are saved.
+- Load model profiles from background settings, sync storage, or the local mirror, whichever has profiles.
+- Show a diagnostic status in the paper assistant with profile counts from background, sync, and local mirror when no model is found.
+
 ## 0.1.8 - 2026-06-30
 
 Settings refresh fix.

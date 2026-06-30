@@ -119,11 +119,28 @@ async function saveCurrentSettings() {
     modelProfiles: profiles
   };
   settings = await sendMessage({ type: "saveSettings", settings: next });
+  await writeSettingsMirror(settings);
   profiles = normalizeProfiles(settings.modelProfiles, settings);
   if (!profiles.some((profile) => profile.id === selectedProfileId)) {
     selectedProfileId = profiles[0]?.id || "";
   }
   renderProfiles();
+}
+
+function writeSettingsMirror(value) {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage?.local?.set({
+        settingsMirror: {
+          ...(value || {}),
+          savedAt: new Date().toISOString(),
+          extensionVersion: chrome.runtime.getManifest().version
+        }
+      }, resolve);
+    } catch {
+      resolve();
+    }
+  });
 }
 
 function renderProfiles() {

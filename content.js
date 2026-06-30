@@ -23,6 +23,7 @@
   let activeStreamCancel = null;
   let isGenerating = false;
   let settingsRefreshPromise = null;
+  let settingsSourceStats = { runtime: 0, sync: 0, mirror: 0, selected: "none" };
   let activeAppearance = "system";
   let currentLanguage = "system";
   let systemAppearanceQuery = null;
@@ -574,6 +575,7 @@
         applyAppearance(settings.appearance);
         renderModelSelect();
         renderUpdateBanner();
+        showModelLoadStatus({ onlyWhenEmpty: false });
         return true;
       })
       .catch((error) => {
@@ -587,36 +589,49 @@
   }
 
   async function readLatestSettings() {
-    const [runtimeResult, storageResult] = await Promise.allSettled([
+    const [runtimeResult, syncResult, mirrorResult] = await Promise.allSettled([
       sendMessage({ type: "getSettings" }),
-      readStoredSettings()
+      readStoredSettings("sync", "settings"),
+      readStoredSettings("local", "settingsMirror")
     ]);
     const runtimeSettings = runtimeResult.status === "fulfilled" ? runtimeResult.value : null;
-    const storedSettings = storageResult.status === "fulfilled" ? storageResult.value : null;
+    const syncSettings = syncResult.status === "fulfilled" ? syncResult.value : null;
+    const mirrorSettings = mirrorResult.status === "fulfilled" ? mirrorResult.value : null;
     const runtimeProfiles = getSettingsProfiles(runtimeSettings);
-    const storedProfiles = getSettingsProfiles(storedSettings);
+    const syncProfiles = getSettingsProfiles(syncSettings);
+    const mirrorProfiles = getSettingsProfiles(mirrorSettings);
+    settingsSourceStats = {
+      runtime: runtimeProfiles.length,
+      sync: syncProfiles.length,
+      mirror: mirrorProfiles.length,
+      selected: runtimeProfiles.length ? "runtime" : syncProfiles.length ? "sync" : mirrorProfiles.length ? "mirror" : "none"
+    };
     if (runtimeProfiles.length) return runtimeSettings;
-    if (storedProfiles.length) {
-      return {
-        ...(runtimeSettings || {}),
-        ...(storedSettings || {}),
-        language: runtimeSettings?.language || storedSettings?.language || "system",
-        appearance: runtimeSettings?.appearance || storedSettings?.appearance || "system",
-        modelProfiles: storedProfiles
-      };
-    }
-    return runtimeSettings || storedSettings || null;
+    if (syncProfiles.length) return mergeSettingsSnapshot(runtimeSettings, syncSettings, syncProfiles);
+    if (mirrorProfiles.length) return mergeSettingsSnapshot(runtimeSettings || syncSettings, mirrorSettings, mirrorProfiles);
+    return runtimeSettings || syncSettings || mirrorSettings || null;
   }
 
-  function readStoredSettings() {
+  function mergeSettingsSnapshot(base, source, profiles) {
+    return {
+      ...(base || {}),
+      ...(source || {}),
+      language: base?.language || source?.language || "system",
+      appearance: base?.appearance || source?.appearance || "system",
+      modelProfiles: profiles
+    };
+  }
+
+  function readStoredSettings(area, key) {
     return new Promise((resolve) => {
       try {
-        chrome.storage?.sync?.get("settings", ({ settings }) => {
+        const storageArea = area === "local" ? chrome.storage?.local : chrome.storage?.sync;
+        storageArea?.get(key, (items) => {
           if (chrome.runtime?.lastError) {
             resolve(null);
             return;
           }
-          resolve(settings || null);
+          resolve(items?.[key] || null);
         });
       } catch {
         resolve(null);
@@ -639,6 +654,24 @@
       : `<option value="">${escapeHtml(t("noModelProfilesShort"))}</option>`;
     modelSelect.disabled = isGenerating || profiles.length === 0;
     selectedModelLabel = buildSelectedModelLabel();
+  }
+
+  function showModelLoadStatus({ onlyWhenEmpty = true } = {}) {
+    const profiles = getSettingsProfiles(currentSettings);
+    if (profiles.length) {
+      if (!onlyWhenEmpty) {
+        setStatus(t("modelProfilesLoaded", {
+          count: profiles.length,
+          source: settingsSourceStats.selected
+        }));
+      }
+      return;
+    }
+    setStatus(t("modelProfilesMissing", {
+      runtime: settingsSourceStats.runtime,
+      sync: settingsSourceStats.sync,
+      mirror: settingsSourceStats.mirror
+    }), true);
   }
 
   function switchChatModel(event) {
