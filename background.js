@@ -168,6 +168,19 @@ function postPort(port, payload) {
 
 async function handleMessage(message) {
   switch (message?.type) {
+    case undefined:
+    case null:
+    case "":
+      return createIgnoredMessageResult(message);
+    case "ping":
+      return {
+        pong: true,
+        version: chrome.runtime.getManifest().version
+      };
+    case "getVersion":
+      return {
+        version: chrome.runtime.getManifest().version
+      };
     case "getSettings":
       return getSettings();
     case "saveSettings":
@@ -197,8 +210,20 @@ async function handleMessage(message) {
     case "checkForUpdate":
       return checkForUpdate({ force: message.force === true });
     default:
-      throw new Error("Unknown message type.");
+      return createIgnoredMessageResult(message);
   }
+}
+
+function createIgnoredMessageResult(message) {
+  const type = normalizeString(message?.type);
+  if (type) {
+    console.debug("Ignored unknown runtime message:", type);
+  }
+  return {
+    ignored: true,
+    reason: type ? "unknown-message-type" : "missing-message-type",
+    type
+  };
 }
 
 async function checkForUpdate({ force = false } = {}) {
