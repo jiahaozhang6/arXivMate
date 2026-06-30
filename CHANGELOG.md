@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.1.12 - 2026-06-30
+
+PDF, Markdown, and reading-layout release.
+
+- Support arXiv and general PDF pages with full-text-first reading for quick, deep, study, and follow-up chats.
+- Move PDF text extraction to the page context so Chrome service-worker PDF.js loading failures no longer block summaries.
+- Add KaTeX-backed math rendering and broader Markdown rendering for tables, task lists, code, blockquotes, images, and loose formulas.
+- Add local panel layout controls: docked split view, floating window, draggable floating header, resizable edges, and restore layout.
+- Clamp model numeric settings to supported bounds so oversized user input is automatically corrected.
+- Improve model thinking/reasoning compatibility for DeepSeek, MiniMax, OpenAI-compatible, and custom providers.
+
+## 0.1.11 - 2026-06-30
+
+Hard fix for paper-chat model selector hydration.
+
+- Persist model profiles both inside `settings` and as a separate local `modelProfiles` snapshot.
+- Let the paper panel read the separate local model snapshot when the full settings object is empty or stale.
+- Broadcast full settings to open arXiv tabs after saving, and reload stale tabs that cannot receive the message.
+- Add the `tabs` permission so arXiv tabs can be reliably refreshed after settings changes.
+
+## 0.1.10 - 2026-06-30
+
+Root fix for missing model profiles.
+
+- Add a stable extension key so unpacked installs keep the same Chrome extension ID across release folders.
+- Make `chrome.storage.local.settings` the authoritative settings store; sync storage is only a backup copy.
+- Route settings reads and writes through the background service worker, and refresh already-open paper panels from local settings changes.
+- Remove the fragile multi-source content-script storage fallback that could leave the chat panel reading an empty model list.
+- Save model profiles after field validation; connection testing stays available per profile but no longer blocks profiles from appearing in the paper chat.
+
 ## 0.1.9 - 2026-06-30
 
 Model profile storage fallback.

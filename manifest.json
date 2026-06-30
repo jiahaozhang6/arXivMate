@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "name": "arXivMate",
-  "description": "A local-first Chrome extension for reading, chatting with, and reviewing arXiv papers using OpenAI-compatible LLMs.",
-  "version": "0.1.9",
+  "description": "A local-first Chrome extension for reading, chatting with, and reviewing arXiv papers and PDF documents using OpenAI-compatible LLMs.",
+  "version": "0.1.12",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtW3edMVYObyO8rFKezC6zNfl8Q7lD+ycal2MzqPdzZZ8oqnu9qs7GAtRgdIeOZOYHcWfY6tmraTZM+8S/HSci98Fg7Hjkz0QUxFDpY1zDhboOBGL5sutvz3ZRwsXbjulRMvoSSPKnEnIcRs06EBkdYHJ/JXe05bNuwLqBhPS8ZnQJ9GhfCYKZgJ8JZgqx6c0Wmyh61BaDj//FXWytuLtEfcfFxO9j0OLSdfZL/SFurd9CTuP8V8+Ou1A9lvsA6OeluxA/+4GkfbG0mcm8iCuCcDQf85cPLPwkTvm4EfrfigtYFLUFq1BB8Z8DwRc1QrcGKQHM/LZSWa54MUYUdM7qwIDAQAB",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -11,7 +12,9 @@
   },
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "tabs",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -33,14 +36,18 @@
   "content_scripts": [
     {
       "matches": [
-        "https://arxiv.org/abs/*",
-        "https://www.arxiv.org/abs/*",
-        "https://arxiv.org/pdf/*",
-        "https://www.arxiv.org/pdf/*"
+        "http://*/*",
+        "https://*/*",
+        "file:///*"
       ],
       "js": [
         "i18n.js",
         "update-banner.js",
+        "vendor/markdown-it/markdown-it.min.js",
+        "vendor/katex/katex.min.js",
+        "vendor/pdfjs/pdf.js",
+        "math-render.js",
+        "markdown-render.js",
         "content.js"
       ],
       "run_at": "document_idle"
@@ -52,14 +59,19 @@
         "content.css",
         "i18n.js",
         "update-banner.js",
+        "vendor/markdown-it/markdown-it.min.js",
+        "vendor/katex/katex.min.js",
+        "vendor/katex/katex.min.css",
+        "vendor/katex/fonts/*",
+        "math-render.js",
+        "markdown-render.js",
         "content.js",
         "panel.html",
         "vendor/pdfjs/pdf.js",
         "vendor/pdfjs/pdf.worker.js"
       ],
       "matches": [
-        "https://arxiv.org/*",
-        "https://www.arxiv.org/*"
+        "<all_urls>"
       ]
     }
   ]

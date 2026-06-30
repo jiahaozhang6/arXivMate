@@ -190,7 +190,7 @@ function renderNoteCard(note) {
           <div class="badge-row">${badges.map((badge) => `<span>${escapeHtml(badge)}</span>`).join("")}</div>
           <h3>${escapeHtml(note.title || note.id)}</h3>
           <div class="meta">
-            ${escapeHtml(note.id || "")}
+            ${escapeHtml(formatNoteId(note))}
             ${note.submittedAt ? ` · ${escapeHtml(t("submittedMeta", { date: note.submittedAt }))}` : ""}
             ${note.paperUpdatedAt ? ` · ${escapeHtml(t("paperUpdatedMeta", { date: note.paperUpdatedAt }))}` : ""}
             ${date ? ` · ${escapeHtml(formatDate(date))}` : ""}
@@ -219,6 +219,11 @@ function renderSubjectChips(subjects) {
   const list = parseSubjects(subjects);
   if (!list.length) return "";
   return `<div class="subject-chips">${list.map((subject) => `<span>${escapeHtml(subject)}</span>`).join("")}</div>`;
+}
+
+function formatNoteId(note) {
+  if (!note?.id) return "";
+  return note.sourceType === "pdf" ? "PDF" : note.id;
 }
 
 async function handleNoteAction(event) {
@@ -302,7 +307,7 @@ async function exportMarkdown(items) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `arxiv-notes-${new Date().toISOString().slice(0, 10)}.md`;
+  link.download = `arxivmate-notes-${new Date().toISOString().slice(0, 10)}.md`;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -311,9 +316,10 @@ async function exportMarkdown(items) {
 
 function buildMarkdown(note) {
   return [
-    `# ${note.title || note.id || "arXiv paper"}`,
+    `# ${note.title || note.id || "Paper"}`,
     "",
-    `- arXiv: ${note.id || ""}`,
+    `- Type: ${note.sourceType === "pdf" ? "PDF" : "arXiv"}`,
+    `- ID: ${note.id || ""}`,
     `- Authors: ${note.authors || ""}`,
     `- Submitted: ${note.submittedAt || ""}`,
     `- Paper updated: ${note.paperUpdatedAt || ""}`,
@@ -483,6 +489,9 @@ function formatTokenCount(value) {
 }
 
 function markdownToHtml(markdown) {
+  if (window.ArxivMateMarkdown?.toHtml) {
+    return window.ArxivMateMarkdown.toHtml(markdown, { headingOffset: 2 });
+  }
   const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
   const html = [];
   let listType = "";

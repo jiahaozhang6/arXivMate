@@ -11,6 +11,8 @@ const DEFAULT_PROFILE_SETTINGS = {
   historyTurns: 4,
   historyMessageChars: 1800,
   defaultContextMode: "fast",
+  thinkingMode: "hide",
+  reasoningLevel: "default",
   useAr5iv: true
 };
 const CHARS_PER_TOKEN_ESTIMATE = 4;
@@ -20,14 +22,15 @@ const MAX_CONVERSATIONS = 300;
 const MAX_MESSAGES_PER_CONVERSATION = 200;
 const MAX_CONTEXT_CACHE_ENTRIES = 80;
 const PDF_TEXT_MIN_CHARS = 1600;
-const PDF_EXTRACT_MAX_PAGES = 80;
-const PDF_TEXT_CONTEXT_SOURCE = "PDF 文本抽取（未上传 PDF 文件）+ arXiv 页面元数据";
+const PDF_TEXT_CONTEXT_SOURCE = "PDF 文本抽取（未上传 PDF 文件）+ 页面元数据";
 const GITHUB_RELEASES_API_URL = "https://api.github.com/repos/jiahaozhang6/arXivMate/releases";
 const GITHUB_RELEASES_PAGE_URL = "https://github.com/jiahaozhang6/arXivMate/releases";
 const UPDATE_CHECK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const SETTINGS_LOCAL_KEY = "settings";
 const SETTINGS_MIRROR_KEY = "settingsMirror";
-
-let pdfjsReady = null;
+const MODEL_PROFILES_LOCAL_KEY = "modelProfiles";
+const BACKUP_FORMAT = "arXivMate.localData";
+const BACKUP_VERSION = 1;
 
 const PROVIDER_PRESETS = {
   openai: {
@@ -53,13 +56,28 @@ const PROVIDER_PRESETS = {
 };
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const { settings } = await chrome.storage.sync.get("settings");
-  if (!settings) {
-    const local = await chrome.storage.local.get(SETTINGS_MIRROR_KEY);
-    const mirror = local[SETTINGS_MIRROR_KEY];
-    await chrome.storage.sync.set({
-      settings: mirror ? normalizeSettings(mirror) : createDefaultSettings()
-    });
+  const [{ settings }, local] = await Promise.all([
+    chrome.storage.sync.get("settings"),
+    chrome.storage.local.get([SETTINGS_LOCAL_KEY, SETTINGS_MIRROR_KEY, MODEL_PROFILES_LOCAL_KEY])
+  ]);
+  const localSettings = local[SETTINGS_LOCAL_KEY];
+  const mirror = local[SETTINGS_MIRROR_KEY];
+  const recovered = recoverSettings(
+    localSettings,
+    createProfilesSnapshotSettings(local[MODEL_PROFILES_LOCAL_KEY]),
+    settings,
+    mirror
+  );
+  const persisted = withSettingsMetadata(recovered);
+  await chrome.storage.local.set({
+    [SETTINGS_LOCAL_KEY]: persisted,
+    [SETTINGS_MIRROR_KEY]: persisted,
+    [MODEL_PROFILES_LOCAL_KEY]: persisted.modelProfiles
+  });
+  try {
+    await chrome.storage.sync.set({ settings: persisted });
+  } catch (error) {
+    console.warn("arXivMate settings sync copy failed:", error);
   }
 });
 
@@ -118,6 +136,12 @@ async function handleMessage(message) {
       return saveSettings(message.settings);
     case "testModelProfile":
       return testModelProfile(message.profile);
+    case "listModelsForProfile":
+      return listModelsForProfile(message.profile);
+    case "exportLocalData":
+      return exportLocalData();
+    case "importLocalData":
+      return importLocalData(message.backup);
     case "summarizePaper":
       return summarizePaper({
         paper: message.paper,
@@ -221,12 +245,27 @@ async function checkForUpdate({ force = false } = {}) {
 }
 
 async function getSettings() {
-  const { settings } = await chrome.storage.sync.get("settings");
-  const local = await chrome.storage.local.get(SETTINGS_MIRROR_KEY);
+  const [{ settings }, local] = await Promise.all([
+    chrome.storage.sync.get("settings"),
+    chrome.storage.local.get([SETTINGS_LOCAL_KEY, SETTINGS_MIRROR_KEY, MODEL_PROFILES_LOCAL_KEY])
+  ]);
+  const localSettings = local[SETTINGS_LOCAL_KEY];
   const mirror = local[SETTINGS_MIRROR_KEY];
-  const normalized = normalizeSettings(settings);
-  if (normalized.modelProfiles.length || !mirror) return normalized;
-  return normalizeSettings(mirror);
+  const recovered = recoverSettings(
+    localSettings,
+    createProfilesSnapshotSettings(local[MODEL_PROFILES_LOCAL_KEY]),
+    settings,
+    mirror
+  );
+  if (shouldPersistRecoveredSettings(localSettings, recovered)) {
+    const persisted = withSettingsMetadata(recovered);
+    await chrome.storage.local.set({
+      [SETTINGS_LOCAL_KEY]: persisted,
+      [SETTINGS_MIRROR_KEY]: persisted,
+      [MODEL_PROFILES_LOCAL_KEY]: persisted.modelProfiles
+    });
+  }
+  return recovered;
 }
 
 async function saveSettings(settings) {
@@ -241,34 +280,147 @@ async function saveSettings(settings) {
   for (const profile of modelProfiles) {
     validateModelProfile(profile);
   }
-  await testAllModelProfiles(modelProfiles);
 
-  const mirrored = {
-    ...next,
-    savedAt: new Date().toISOString(),
-    extensionVersion: chrome.runtime.getManifest().version
-  };
-  await Promise.all([
-    chrome.storage.sync.set({ settings: next }),
-    chrome.storage.local.set({ [SETTINGS_MIRROR_KEY]: mirrored })
-  ]);
-  return next;
+  const persisted = withSettingsMetadata(next);
+  await chrome.storage.local.set({
+    [SETTINGS_LOCAL_KEY]: persisted,
+    [SETTINGS_MIRROR_KEY]: persisted,
+    [MODEL_PROFILES_LOCAL_KEY]: persisted.modelProfiles
+  });
+  notifyPaperTabsSettingsChanged(next);
+
+  try {
+    await chrome.storage.sync.set({ settings: persisted });
+    return next;
+  } catch (error) {
+    console.warn("arXivMate settings sync copy failed:", error);
+    return {
+      ...next,
+      storageWarning: error.message || String(error)
+    };
+  }
 }
 
-async function testAllModelProfiles(modelProfiles) {
-  if (!modelProfiles.length) return [];
-  const results = await Promise.allSettled(modelProfiles.map((profile) => testModelProfile(profile)));
-  const failures = results
-    .map((result, index) => ({ result, profile: modelProfiles[index] }))
-    .filter(({ result }) => result.status === "rejected")
-    .map(({ result, profile }) => {
-      const label = profile.name || profile.model || profile.id || "Model";
-      return `${label}: ${result.reason?.message || String(result.reason)}`;
-    });
-  if (failures.length) {
-    throw new Error(`以下模型测试失败，设置未保存：${failures.join("；")}`);
+async function exportLocalData() {
+  const [local, sync] = await Promise.all([
+    chrome.storage.local.get([
+      SETTINGS_LOCAL_KEY,
+      SETTINGS_MIRROR_KEY,
+      MODEL_PROFILES_LOCAL_KEY,
+      "conversations",
+      "notes",
+      "reviewState",
+      "paperContextCache"
+    ]),
+    chrome.storage.sync.get("settings")
+  ]);
+  const settings = recoverSettings(
+    local[SETTINGS_LOCAL_KEY],
+    createProfilesSnapshotSettings(local[MODEL_PROFILES_LOCAL_KEY]),
+    sync.settings,
+    local[SETTINGS_MIRROR_KEY]
+  );
+  return {
+    format: BACKUP_FORMAT,
+    version: BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    extensionVersion: chrome.runtime.getManifest().version,
+    settings,
+    modelProfiles: settings.modelProfiles,
+    conversations: local.conversations || {},
+    notes: local.notes || {},
+    reviewState: local.reviewState || {},
+    paperContextCache: local.paperContextCache || {}
+  };
+}
+
+async function importLocalData(backup) {
+  const data = parseBackupPayload(backup);
+  if (data.format && data.format !== BACKUP_FORMAT) {
+    throw new Error("备份文件格式不匹配。");
   }
-  return results.map((result) => result.value);
+
+  const importedSettings = normalizeSettings({
+    ...(data.settings || {}),
+    modelProfiles: data.modelProfiles || data.settings?.modelProfiles || []
+  });
+  const current = await exportLocalData();
+  const nextSettings = importedSettings.modelProfiles.length
+    ? importedSettings
+    : current.settings;
+  const persistedSettings = withSettingsMetadata(nextSettings);
+
+  const nextLocal = {
+    [SETTINGS_LOCAL_KEY]: persistedSettings,
+    [SETTINGS_MIRROR_KEY]: persistedSettings,
+    [MODEL_PROFILES_LOCAL_KEY]: persistedSettings.modelProfiles,
+    conversations: mergeRecordMaps(current.conversations, data.conversations),
+    notes: mergeRecordMaps(current.notes, data.notes),
+    reviewState: mergeRecordMaps(current.reviewState, data.reviewState),
+    paperContextCache: mergeRecordMaps(current.paperContextCache, data.paperContextCache)
+  };
+
+  await chrome.storage.local.set(nextLocal);
+  try {
+    await chrome.storage.sync.set({ settings: persistedSettings });
+  } catch (error) {
+    console.warn("arXivMate backup settings sync copy failed:", error);
+  }
+  notifyPaperTabsSettingsChanged(persistedSettings);
+  return {
+    settings: persistedSettings,
+    modelProfiles: persistedSettings.modelProfiles,
+    conversations: Object.keys(nextLocal.conversations).length,
+    notes: Object.keys(nextLocal.notes).length,
+    reviewState: Object.keys(nextLocal.reviewState).length,
+    paperContextCache: Object.keys(nextLocal.paperContextCache).length
+  };
+}
+
+function parseBackupPayload(backup) {
+  if (typeof backup === "string") {
+    try {
+      return JSON.parse(backup);
+    } catch {
+      throw new Error("备份文件不是有效 JSON。");
+    }
+  }
+  if (backup && typeof backup === "object") return backup;
+  throw new Error("备份内容为空。");
+}
+
+function mergeRecordMaps(current, incoming) {
+  const left = current && typeof current === "object" && !Array.isArray(current) ? current : {};
+  const right = incoming && typeof incoming === "object" && !Array.isArray(incoming) ? incoming : {};
+  return {
+    ...left,
+    ...right
+  };
+}
+
+async function notifyPaperTabsSettingsChanged(settings) {
+  const urls = [
+    "http://*/*",
+    "https://*/*",
+    "file:///*"
+  ];
+  try {
+    const tabGroups = await Promise.all(urls.map((url) => chrome.tabs.query({ url })));
+    const tabs = tabGroups.flat();
+    for (const tab of tabs) {
+      if (!tab.id) continue;
+      try {
+        await chrome.tabs.sendMessage(tab.id, {
+          type: "settingsChanged",
+          settings
+        });
+      } catch {
+        chrome.tabs.reload(tab.id).catch(() => {});
+      }
+    }
+  } catch (error) {
+    console.debug("arXivMate settings refresh notification failed:", error);
+  }
 }
 
 async function testModelProfile(profile) {
@@ -295,6 +447,37 @@ async function testModelProfile(profile) {
     profileName: normalized.name,
     model: normalized.model,
     text
+  };
+}
+
+async function listModelsForProfile(profile) {
+  const normalized = normalizeModelProfile(profile);
+  if (!normalized?.baseUrl) throw new Error("请先填写 API Base URL。");
+  const endpoint = buildModelsEndpoint(normalized.baseUrl);
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: buildRequestHeaders(normalized),
+    cache: "no-store"
+  });
+  const raw = await response.text();
+  let payload;
+  try {
+    payload = raw ? JSON.parse(raw) : {};
+  } catch {
+    payload = { raw };
+  }
+  if (!response.ok) {
+    const detail = payload?.error?.message || payload?.message || raw || `${response.status} ${response.statusText}`;
+    throw new Error(`模型列表加载失败：${detail}`);
+  }
+  const models = extractModelIds(payload);
+  if (!models.length) {
+    throw new Error("接口没有返回可识别的模型列表，请手动填写模型名称。");
+  }
+  return {
+    profileId: normalized.id,
+    baseUrl: normalized.baseUrl,
+    models
   };
 }
 
@@ -375,7 +558,7 @@ async function prepareSummarizePaper({ paper, mode = "quick", question = "", per
 }
 
 async function finishSummarizePaper(prepared, result) {
-  const answer = cleanModelOutput(result);
+  const answer = cleanModelOutput(result, prepared.settings);
   const generatedAt = new Date().toISOString();
   let conversation = prepared.existingConversation;
   if (prepared.persist && prepared.normalizedPaper.id) {
@@ -403,76 +586,107 @@ async function finishSummarizePaper(prepared, result) {
 }
 
 async function callChatCompletions(settings, messages) {
-  const endpoint = buildChatEndpoint(settings.baseUrl);
   const body = buildChatRequestBody(settings, messages, false);
+  const payload = await fetchChatCompletionsPayload(settings, body);
+  const content = extractAssistantContent(payload, settings);
+  if (!content) {
+    throw new Error("LLM 返回为空，可能是模型名、接口格式或 API key 不匹配。");
+  }
+  return cleanModelOutput(content, settings);
+}
+
+async function callChatCompletionsStream(settings, messages, onDelta, signal) {
+  const body = buildChatRequestBody(settings, messages, true);
+  const response = await fetchChatCompletionsStreamResponse(settings, body, signal);
+  if (response.body) return parseChatCompletionsStream(response.body, onDelta, settings);
+  const content = extractAssistantContent(response.payload, settings);
+  if (!content) throw new Error("LLM 返回为空，可能是模型名、接口格式或 API key 不匹配。");
+  const cleaned = cleanModelOutput(content, settings);
+  if (cleaned) onDelta(cleaned);
+  return cleaned;
+}
+
+async function fetchChatCompletionsPayload(settings, body, retryCount = 0) {
+  const endpoint = buildChatEndpoint(settings.baseUrl);
   const response = await fetch(endpoint, {
     method: "POST",
     headers: buildRequestHeaders(settings),
     body: JSON.stringify(body)
   });
-
-  const raw = await response.text();
-  let payload;
-  try {
-    payload = raw ? JSON.parse(raw) : {};
-  } catch {
-    payload = { raw };
-  }
-
+  const payload = await parseResponsePayload(response);
   if (!response.ok) {
-    const detail = payload?.error?.message || payload?.message || raw || `${response.status} ${response.statusText}`;
+    const detail = getResponseErrorDetail(response, payload);
+    if (retryCount < 1 && shouldRetryWithAdaptiveThinking(response.status, detail, body)) {
+      return fetchChatCompletionsPayload(settings, adaptThinkingType(body, "adaptive"), retryCount + 1);
+    }
     throw new Error(`LLM 请求失败：${detail}`);
   }
-
-  const content = extractAssistantContent(payload);
-  if (!content) {
-    throw new Error("LLM 返回为空，可能是模型名、接口格式或 API key 不匹配。");
-  }
-  return cleanModelOutput(content);
+  return payload;
 }
 
-async function callChatCompletionsStream(settings, messages, onDelta, signal) {
+async function fetchChatCompletionsStreamResponse(settings, body, signal, retryCount = 0) {
   const endpoint = buildChatEndpoint(settings.baseUrl);
   const response = await fetch(endpoint, {
     method: "POST",
     headers: buildRequestHeaders(settings),
-    body: JSON.stringify(buildChatRequestBody(settings, messages, true)),
+    body: JSON.stringify(body),
     signal
   });
-
   if (!response.ok) {
-    const raw = await response.text();
-    let payload;
-    try {
-      payload = raw ? JSON.parse(raw) : {};
-    } catch {
-      payload = { raw };
+    const payload = await parseResponsePayload(response);
+    const detail = getResponseErrorDetail(response, payload);
+    if (retryCount < 1 && shouldRetryWithAdaptiveThinking(response.status, detail, body)) {
+      return fetchChatCompletionsStreamResponse(settings, adaptThinkingType(body, "adaptive"), signal, retryCount + 1);
     }
-    const detail = payload?.error?.message || payload?.message || raw || `${response.status} ${response.statusText}`;
     if (isStreamUnsupportedError(response.status, detail)) {
-      const fallback = await callChatCompletions(settings, messages);
-      if (fallback) onDelta(fallback);
-      return fallback;
+      return {
+        body: null,
+        payload: await fetchChatCompletionsPayload(settings, { ...body, stream: false })
+      };
     }
     throw new Error(`LLM 请求失败：${detail}`);
   }
-
   if (!response.body) {
-    const raw = await response.text();
-    let payload;
-    try {
-      payload = raw ? JSON.parse(raw) : {};
-    } catch {
-      payload = { raw };
-    }
-    const content = extractAssistantContent(payload);
-    if (!content) throw new Error("LLM 返回为空，可能是模型名、接口格式或 API key 不匹配。");
-    const cleaned = cleanModelOutput(content);
-    if (cleaned) onDelta(cleaned);
-    return cleaned;
+    return {
+      body: null,
+      payload: await parseResponsePayload(response)
+    };
   }
+  return {
+    body: response.body,
+    payload: null
+  };
+}
 
-  return parseChatCompletionsStream(response.body, onDelta);
+async function parseResponsePayload(response) {
+  const raw = await response.text();
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return { raw };
+  }
+}
+
+function getResponseErrorDetail(response, payload) {
+  return payload?.error?.message || payload?.message || payload?.raw || `${response.status} ${response.statusText}`;
+}
+
+function shouldRetryWithAdaptiveThinking(status, detail, body) {
+  if (![400, 422].includes(Number(status))) return false;
+  if (body?.thinking?.type !== "enabled") return false;
+  const text = normalizeString(detail).toLowerCase();
+  return text.includes("thinking.type") && text.includes("adaptive");
+}
+
+function adaptThinkingType(body, type) {
+  if (!body?.thinking || typeof body.thinking !== "object") return body;
+  return {
+    ...body,
+    thinking: {
+      ...body.thinking,
+      type
+    }
+  };
 }
 
 function buildRequestHeaders(settings) {
@@ -486,14 +700,26 @@ function buildRequestHeaders(settings) {
 }
 
 function buildChatRequestBody(settings, messages, stream) {
-  return {
+  const body = {
     model: settings.model,
     messages,
-    temperature: settings.temperature,
     ...buildOutputTokenParam(settings.model, settings.maxOutputTokens),
     stream,
-    ...getProviderRequestExtras(settings.provider)
+    ...getProviderRequestExtras(settings)
   };
+  if (!shouldOmitTemperature(settings)) {
+    body.temperature = settings.temperature;
+  }
+  return body;
+}
+
+function shouldOmitTemperature(settings) {
+  if (normalizeProvider(settings?.provider) !== "deepseek") return false;
+  if (normalizeThinkingMode(settings?.thinkingMode) === "disabled") return false;
+  const level = normalizeReasoningLevel(settings?.reasoningLevel);
+  if (level === "minimal") return false;
+  const name = normalizeString(settings?.model).toLowerCase();
+  return /^deepseek-v4-(flash|pro)/.test(name);
 }
 
 function isStreamUnsupportedError(status, detail) {
@@ -502,9 +728,10 @@ function isStreamUnsupportedError(status, detail) {
   return /stream|streaming/.test(text) && /unsupported|not support|does not support|invalid|unknown|unrecognized/.test(text);
 }
 
-async function parseChatCompletionsStream(body, onDelta) {
+async function parseChatCompletionsStream(body, onDelta, settings = {}) {
   const reader = body.getReader();
   const decoder = new TextDecoder("utf-8");
+  const stripThinking = shouldStripThinkingOutput(settings);
   const state = createThinkingStripState();
   let buffer = "";
   let answer = "";
@@ -517,9 +744,9 @@ async function parseChatCompletionsStream(body, onDelta) {
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() || "";
       for (const line of lines) {
-        const delta = parseStreamLineDelta(line);
+        const delta = parseStreamLineDelta(line, settings);
         if (!delta) continue;
-        const cleanDelta = stripThinkingChunk(delta, state);
+        const cleanDelta = stripThinking ? stripThinkingChunk(delta, state) : delta;
         if (!cleanDelta) continue;
         answer += cleanDelta;
         onDelta(cleanDelta);
@@ -527,8 +754,8 @@ async function parseChatCompletionsStream(body, onDelta) {
     }
 
     if (buffer.trim()) {
-      const delta = parseStreamLineDelta(buffer);
-      const cleanDelta = stripThinkingChunk(delta, state);
+      const delta = parseStreamLineDelta(buffer, settings);
+      const cleanDelta = stripThinking ? stripThinkingChunk(delta, state) : delta;
       if (cleanDelta) {
         answer += cleanDelta;
         onDelta(cleanDelta);
@@ -538,15 +765,15 @@ async function parseChatCompletionsStream(body, onDelta) {
     reader.releaseLock();
   }
 
-  const tail = cleanModelOutput(state.buffer);
+  const tail = stripThinking ? cleanModelOutput(state.buffer, settings) : "";
   if (tail && !state.inThinking) {
     answer += tail;
     onDelta(tail);
   }
-  return cleanModelOutput(answer);
+  return cleanModelOutput(answer, settings);
 }
 
-function parseStreamLineDelta(line) {
+function parseStreamLineDelta(line, settings = {}) {
   const trimmed = String(line || "").trim();
   if (!trimmed) return "";
   const data = trimmed.startsWith("data:") ? trimmed.slice(5).trim() : trimmed;
@@ -558,24 +785,75 @@ function parseStreamLineDelta(line) {
     return "";
   }
   const choice = payload?.choices?.[0];
-  return normalizeModelContent(
-    choice?.delta?.content ??
-    choice?.message?.content ??
-    payload?.delta ??
-    payload?.text ??
-    ""
-  );
+  const includeThinking = normalizeThinkingMode(settings?.thinkingMode) === "show";
+  return firstModelContent([
+    choice?.delta?.content,
+    choice?.message?.content,
+    ...(includeThinking ? [
+      choice?.delta?.reasoning_content,
+      choice?.delta?.reasoning,
+      choice?.delta?.thinking,
+      choice?.delta?.thought,
+      choice?.message?.reasoning_content,
+      choice?.message?.reasoning,
+      choice?.message?.thinking,
+      choice?.message?.thought
+    ] : []),
+    payload?.delta,
+    payload?.text
+  ]);
 }
 
-function extractAssistantContent(payload) {
-  return normalizeModelContent(
-    payload?.choices?.[0]?.message?.content ??
-    payload?.choices?.[0]?.text ??
-    payload?.message?.content ??
-    payload?.text ??
-    payload?.raw ??
-    ""
-  );
+function extractAssistantContent(payload, settings = {}) {
+  const includeThinking = normalizeThinkingMode(settings?.thinkingMode) === "show";
+  const message = payload?.choices?.[0]?.message;
+  return firstModelContent([
+    message?.content,
+    ...(includeThinking ? [
+      message?.reasoning_content,
+      message?.reasoning,
+      message?.thinking,
+      message?.thought
+    ] : []),
+    payload?.choices?.[0]?.text,
+    payload?.message?.content,
+    payload?.text,
+    payload?.raw
+  ]);
+}
+
+function firstModelContent(values) {
+  for (const value of values) {
+    const text = normalizeModelContent(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function extractModelIds(payload) {
+  const candidates = [];
+  collectModelCandidates(payload?.data, candidates);
+  collectModelCandidates(payload?.models, candidates);
+  if (!candidates.length) collectModelCandidates(payload, candidates);
+  return [...new Set(candidates.map((model) => normalizeString(model)).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+}
+
+function collectModelCandidates(value, out) {
+  if (!value) return;
+  if (typeof value === "string") {
+    out.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) collectModelCandidates(entry, out);
+    return;
+  }
+  if (typeof value !== "object") return;
+  const id = value.id || value.model || value.name;
+  if (typeof id === "string") out.push(id);
+  if (Array.isArray(value.data)) collectModelCandidates(value.data, out);
+  if (Array.isArray(value.models)) collectModelCandidates(value.models, out);
 }
 
 function normalizeModelContent(value) {
@@ -599,7 +877,10 @@ function createThinkingStripState() {
   };
 }
 
-function cleanModelOutput(text) {
+function cleanModelOutput(text, settings = {}) {
+  if (!shouldStripThinkingOutput(settings)) {
+    return normalizeTextBlock(text);
+  }
   const state = createThinkingStripState();
   const stripped = stripThinkingChunk(String(text || ""), state);
   return normalizeTextBlock(state.inThinking ? stripped : `${stripped}${state.buffer}`)
@@ -665,19 +946,102 @@ function keepPossibleTagTail(text, tags) {
   return best;
 }
 
-function getProviderRequestExtras(provider) {
-  if (provider === "deepseek" || provider === "minimax") {
+function shouldStripThinkingOutput(settings) {
+  return normalizeThinkingMode(settings?.thinkingMode) !== "show";
+}
+
+function getProviderRequestExtras(settings) {
+  const provider = normalizeProvider(settings?.provider);
+  const model = settings?.model;
+  const thinkingMode = normalizeThinkingMode(settings?.thinkingMode);
+  const reasoningLevel = normalizeReasoningLevel(settings?.reasoningLevel);
+  if (thinkingMode === "disabled") {
+    if (provider === "deepseek" || provider === "minimax") {
+      return {
+        thinking: { type: "disabled" }
+      };
+    }
+    if (provider === "openai" && usesReasoningEffort(model)) {
+      return {
+        reasoning_effort: "minimal"
+      };
+    }
+    return {};
+  }
+  if (provider === "deepseek") {
+    return buildDeepSeekReasoningExtras(model, reasoningLevel);
+  }
+  if (reasoningLevel === "default") return {};
+  if (provider === "minimax") {
     return {
-      thinking: { type: "disabled" }
+      thinking: { type: "adaptive" }
+    };
+  }
+  if (provider === "openai" && usesReasoningEffort(model)) {
+    return {
+      reasoning_effort: mapReasoningLevelToOpenAIEffort(reasoningLevel)
     };
   }
   return {};
 }
 
+function buildDeepSeekReasoningExtras(model, reasoningLevel) {
+  const name = normalizeString(model).toLowerCase();
+  if (!/^deepseek-v4-(flash|pro)/.test(name) && !/^deepseek-(reasoner|r1)/.test(name)) {
+    return {};
+  }
+  if (reasoningLevel === "minimal") {
+    return {
+      thinking: { type: "disabled" }
+    };
+  }
+  const isDeepSeekV4 = /^deepseek-v4-(flash|pro)/.test(name);
+  const effort = reasoningLevel === "xhigh" ? "max" : reasoningLevel === "high" || (isDeepSeekV4 && reasoningLevel === "default") ? "high" : null;
+  return {
+    thinking: { type: "enabled" },
+    ...(effort ? { reasoning_effort: effort } : {})
+  };
+}
+
+function mapReasoningLevelToOpenAIEffort(level) {
+  if (level === "minimal") return "minimal";
+  if (level === "low") return "low";
+  if (level === "medium") return "medium";
+  if (level === "high" || level === "xhigh") return "high";
+  return "medium";
+}
+
 function buildChatEndpoint(baseUrl) {
-  const trimmed = normalizeString(baseUrl).replace(/\/+$/, "");
+  const trimmed = normalizeOpenAICompatibleBase(baseUrl);
   if (/\/chat\/completions$/i.test(trimmed)) return trimmed;
   return `${trimmed}/chat/completions`;
+}
+
+function buildModelsEndpoint(baseUrl) {
+  const trimmed = normalizeOpenAICompatibleBase(baseUrl);
+  if (/\/models$/i.test(trimmed)) return trimmed;
+  if (/\/chat\/completions$/i.test(trimmed)) {
+    return trimmed.replace(/\/chat\/completions$/i, "/models");
+  }
+  return `${trimmed}/models`;
+}
+
+function normalizeOpenAICompatibleBase(baseUrl) {
+  const trimmed = normalizeString(baseUrl).replace(/\/+$/, "");
+  if (!trimmed) return "";
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return trimmed;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const path = parsed.pathname.replace(/\/+$/, "") || "/";
+  const origin = parsed.origin;
+  if ((host === "api.deepseek.com" || host === "api.minimaxi.com" || host === "api.minimax.io") && path === "/") {
+    return `${origin}/v1`;
+  }
+  return trimmed;
 }
 
 function buildOutputTokenParam(model, maxOutputTokens) {
@@ -691,6 +1055,11 @@ function buildOutputTokenParam(model, maxOutputTokens) {
 function usesMaxCompletionTokens(model) {
   const name = normalizeString(model).toLowerCase();
   return name.startsWith("gpt-5") || /^o\d/.test(name) || name.includes("reasoning");
+}
+
+function usesReasoningEffort(model) {
+  const name = normalizeString(model).toLowerCase();
+  return name.startsWith("gpt-5") || /^o\d/.test(name);
 }
 
 function applyInputBudget(messages, settings) {
@@ -806,7 +1175,7 @@ function buildPrompt({ paper, mode, question, fullText, contextSource, language,
   const promptLanguage = resolveOutputLanguageCode(language);
   const paperBlock = [
     `Title: ${paper.title || "Unknown"}`,
-    `arXiv ID: ${paper.id || "Unknown"}`,
+    `${paper.sourceType === "arxiv" ? "arXiv ID" : "Document ID"}: ${paper.id || "Unknown"}`,
     `Authors: ${paper.authors || "Unknown"}`,
     `Submitted: ${paper.submittedAt || "Unknown"}`,
     `Updated: ${paper.paperUpdatedAt || "Unknown"}`,
@@ -822,11 +1191,12 @@ function buildPrompt({ paper, mode, question, fullText, contextSource, language,
     {
       role: "system",
       content: [
-        "You are a rigorous research-reading assistant for arXiv papers.",
+        "You are a rigorous research-reading assistant for research papers and PDF documents.",
         `Answer in ${outputLanguage}.`,
         "Be precise and evidence-aware. Separate what the paper claims from what can be inferred.",
         "If the available context is only metadata or abstract, state that limitation clearly.",
-        "Prefer structured Markdown with concise bullets and concrete learning actions."
+        "Prefer structured Markdown with concise bullets and concrete learning actions.",
+        "Write every variable, equation, loss, probability expression, and tensor notation as LaTeX math using $...$ for inline math or $$...$$ for display math. Do not leave raw identifiers such as h_v, x_t, or q(x_t|x_0) outside math delimiters."
       ].join(" ")
     },
     {
@@ -962,88 +1332,38 @@ async function fetchAr5ivText(arxivId, maxChars) {
   return text.slice(0, Math.max(4000, Number(maxChars) || DEFAULT_PROFILE_SETTINGS.maxContextChars));
 }
 
-async function fetchPdfText(pdfUrl, maxChars) {
-  const url = normalizeString(pdfUrl);
-  if (!url) return "";
-  const response = await fetch(url, { credentials: "omit" });
-  if (!response.ok) {
-    throw new Error(`PDF returned ${response.status}`);
-  }
-  const bytes = await response.arrayBuffer();
-  return extractPdfText(bytes, maxChars);
-}
-
-async function extractPdfText(bytes, maxChars) {
-  const pdfjs = await loadPdfJs();
-  const task = pdfjs.getDocument({
-    data: new Uint8Array(bytes),
-    disableFontFace: true,
-    disableWorker: true,
-    useSystemFonts: true
-  });
-  const pdf = await task.promise;
-  const parts = [];
-  const pageLimit = Math.min(pdf.numPages, PDF_EXTRACT_MAX_PAGES);
-  const charLimit = Math.max(4000, Number(maxChars) || DEFAULT_PROFILE_SETTINGS.maxContextChars);
-
-  for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item) => typeof item.str === "string" ? item.str : "")
-      .filter(Boolean)
-      .join(" ");
-    if (pageText.trim()) {
-      parts.push(`Page ${pageNumber}\n${pageText}`);
-    }
-    if (parts.join("\n\n").length >= charLimit) break;
-  }
-
-  try {
-    await pdf.destroy();
-  } catch {}
-
-  return normalizeTextBlock(parts.join("\n\n")).slice(0, charLimit);
-}
-
-async function loadPdfJs() {
-  if (!pdfjsReady) {
-    pdfjsReady = importScriptsPromise("vendor/pdfjs/pdf.js").then(() => {
-      const pdfjs = globalThis.pdfjsLib;
-      if (!pdfjs?.getDocument) throw new Error("PDF.js 未正确加载。");
-      if (pdfjs.GlobalWorkerOptions) {
-        pdfjs.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("vendor/pdfjs/pdf.worker.js");
-      }
-      return pdfjs;
-    });
-  }
-  return pdfjsReady;
-}
-
-function importScriptsPromise(path) {
-  return new Promise((resolve, reject) => {
-    try {
-      importScripts(chrome.runtime.getURL(path));
-      resolve();
-    } catch (error) {
-      try {
-        importScripts(path);
-        resolve();
-      } catch {
-        reject(error);
-      }
-    }
-  });
-}
-
 async function getPaperContext(settings, paper, contextMode = "auto") {
   let fullText = "";
-  let contextSource = "arXiv 摘要和页面元数据";
+  let contextSource = paper.sourceType === "arxiv" ? "arXiv 摘要和页面元数据" : "页面元数据";
+  let pdfFailure = "";
+  const providedFullText = normalizeTextBlock(paper.fullText);
+  if (providedFullText.length > PDF_TEXT_MIN_CHARS) {
+    const cacheKey = paper.id || paper.pdfUrl;
+    const contextSource = normalizeString(paper.contextSource) || PDF_TEXT_CONTEXT_SOURCE;
+    if (cacheKey) {
+      await savePaperContextCache(cacheKey, {
+        fullText: providedFullText.slice(0, settings.maxContextChars),
+        contextSource,
+        maxContextChars: settings.maxContextChars,
+        updatedAt: new Date().toISOString()
+      });
+    }
+    return {
+      fullText: providedFullText.slice(0, settings.maxContextChars),
+      contextSource
+    };
+  }
+  if (providedFullText) {
+    pdfFailure = `provided PDF text too short (${providedFullText.length} chars)`;
+  } else if (paper.contextSource && /失败|failed|error/i.test(paper.contextSource)) {
+    pdfFailure = normalizeString(paper.contextSource);
+  }
 
-  const { paperContextCache = {} } = await chrome.storage.local.get("paperContextCache");
   const cacheKey = paper.id || paper.pdfUrl;
+  const { paperContextCache = {} } = await chrome.storage.local.get("paperContextCache");
   const cached = cacheKey ? paperContextCache[cacheKey] : null;
-  const shouldFetchFullText = contextMode === "full" || (contextMode === "auto" && shouldUseFullTextByDefault(settings));
+  const shouldFetchFullText = contextMode === "full" ||
+    (contextMode === "auto" && (paper.sourceType === "pdf" || shouldUseFullTextByDefault(settings)));
   if (
     cached &&
     cached.maxContextChars >= settings.maxContextChars &&
@@ -1060,28 +1380,16 @@ async function getPaperContext(settings, paper, contextMode = "auto") {
     return { fullText, contextSource };
   }
 
-  if (paper.pdfUrl) {
-    try {
-      const pdfText = await fetchPdfText(paper.pdfUrl, settings.maxContextChars);
-      if (pdfText && pdfText.length > PDF_TEXT_MIN_CHARS) {
-        fullText = pdfText;
-        contextSource = PDF_TEXT_CONTEXT_SOURCE;
-        if (cacheKey) {
-          await savePaperContextCache(cacheKey, {
-            fullText,
-            contextSource,
-            maxContextChars: settings.maxContextChars,
-            updatedAt: new Date().toISOString()
-          });
-        }
-        return { fullText, contextSource };
-      }
-    } catch (error) {
-      console.info("PDF text unavailable:", error.message);
-    }
+  if (shouldFetchFullText && paper.pdfUrl && !pdfFailure) {
+    pdfFailure = "页面侧没有传入 PDF 正文，请重新加载扩展并刷新当前页面";
   }
 
-  if (!settings.useAr5iv || !paper.id) {
+  if (!settings.useAr5iv || paper.sourceType !== "arxiv" || !paper.id) {
+    if (shouldFetchFullText && paper.sourceType === "pdf") {
+      contextSource = pdfFailure
+        ? `页面元数据（PDF 抽取失败：${pdfFailure}）`
+        : "页面元数据（没有可读取的 PDF URL）";
+    }
     return { fullText, contextSource };
   }
 
@@ -1101,6 +1409,9 @@ async function getPaperContext(settings, paper, contextMode = "auto") {
     }
   } catch (error) {
     console.info("ar5iv text unavailable:", error.message);
+    if (pdfFailure) {
+      contextSource = `arXiv 摘要和页面元数据（PDF 抽取失败：${pdfFailure}；ar5iv 也不可用：${error.message || String(error)}）`;
+    }
   }
 
   return { fullText, contextSource };
@@ -1172,7 +1483,7 @@ async function appendConversationTurn({ paper, mode, question, answer, source, s
     ...paper,
     id,
     title,
-    kind: "paper",
+    kind: paper.sourceType === "pdf" ? "pdf" : "paper",
     createdAt: previous.createdAt || now,
     updatedAt: now,
     lastMode: mode,
@@ -1214,8 +1525,9 @@ function getRecentConversationMessages(messages, settings) {
 }
 
 function resolveContextMode(mode, requested) {
-  if (requested === "full" || requested === "fast") return requested;
-  if (mode === "deep" || mode === "study") return "full";
+  if (requested === "full") return "full";
+  if (requested === "fast" && !["quick", "deep", "study", "ask"].includes(mode)) return "fast";
+  if (["quick", "deep", "study", "ask"].includes(mode)) return "full";
   return "auto";
 }
 
@@ -1277,7 +1589,7 @@ function decodeHtmlEntities(value) {
 
 async function saveNote(paper, summary, mode = "quick") {
   const normalizedPaper = normalizePaper(paper);
-  if (!normalizedPaper.id) throw new Error("没有识别到 arXiv ID，无法保存。");
+  if (!normalizedPaper.id) throw new Error("没有识别到文档 ID，无法保存。");
   const now = new Date().toISOString();
   const { notes = {} } = await chrome.storage.local.get("notes");
   const previous = notes[normalizedPaper.id] || {};
@@ -1327,8 +1639,10 @@ async function openOptionsPage() {
 }
 
 function normalizePaper(paper = {}) {
+  const id = normalizeString(paper.id);
   return {
-    id: normalizeString(paper.id),
+    id,
+    sourceType: normalizeString(paper.sourceType) || (/^pdf:/i.test(id) ? "pdf" : "arxiv"),
     title: normalizeString(paper.title),
     authors: normalizeString(paper.authors),
     abstract: normalizeString(paper.abstract),
@@ -1336,7 +1650,10 @@ function normalizePaper(paper = {}) {
     comments: normalizeString(paper.comments),
     submittedAt: normalizeString(paper.submittedAt),
     paperUpdatedAt: normalizeString(paper.paperUpdatedAt),
-    pdfUrl: normalizeString(paper.pdfUrl)
+    pdfUrl: normalizeString(paper.pdfUrl),
+    pageUrl: normalizeString(paper.pageUrl),
+    fullText: truncateTextBlock(paper.fullText, DEFAULT_PROFILE_SETTINGS.maxContextChars * 5),
+    contextSource: normalizeString(paper.contextSource)
   };
 }
 
@@ -1354,6 +1671,40 @@ function normalizeSettings(settings) {
     language: normalizeLanguage(settings?.language),
     appearance: normalizeAppearance(settings?.appearance),
     modelProfiles
+  };
+}
+
+function recoverSettings(...candidates) {
+  const normalizedCandidates = candidates
+    .filter((candidate) => candidate && typeof candidate === "object")
+    .map((candidate) => normalizeSettings(candidate));
+  const primary = normalizedCandidates[0] || createDefaultSettings();
+  const profileSource = normalizedCandidates.find((candidate) => candidate.modelProfiles.length);
+  if (!profileSource) return primary;
+  return {
+    ...primary,
+    modelProfiles: profileSource.modelProfiles
+  };
+}
+
+function createProfilesSnapshotSettings(modelProfiles) {
+  return Array.isArray(modelProfiles) && modelProfiles.length
+    ? { modelProfiles }
+    : null;
+}
+
+function shouldPersistRecoveredSettings(existing, recovered) {
+  if (!existing) return true;
+  const normalizedExisting = normalizeSettings(existing);
+  const normalizedRecovered = normalizeSettings(recovered);
+  return !normalizedExisting.modelProfiles.length && normalizedRecovered.modelProfiles.length > 0;
+}
+
+function withSettingsMetadata(settings) {
+  return {
+    ...normalizeSettings(settings),
+    savedAt: new Date().toISOString(),
+    extensionVersion: chrome.runtime.getManifest().version
   };
 }
 
@@ -1421,6 +1772,8 @@ function normalizeModelProfile(profile) {
     historyTurns: normalizeHistoryTurns(profile.historyTurns),
     historyMessageChars: normalizeHistoryMessageChars(profile.historyMessageChars),
     defaultContextMode: normalizeDefaultContextMode(profile.defaultContextMode),
+    thinkingMode: normalizeThinkingMode(profile.thinkingMode),
+    reasoningLevel: normalizeReasoningLevel(profile.reasoningLevel),
     useAr5iv: profile.useAr5iv !== false
   };
 }
@@ -1459,6 +1812,8 @@ function flattenProfile(profile) {
     historyTurns: profile.historyTurns,
     historyMessageChars: profile.historyMessageChars,
     defaultContextMode: profile.defaultContextMode,
+    thinkingMode: profile.thinkingMode,
+    reasoningLevel: profile.reasoningLevel,
     useAr5iv: profile.useAr5iv
   };
 }
@@ -1503,6 +1858,20 @@ function normalizeHistoryMessageChars(value) {
 
 function normalizeDefaultContextMode(value) {
   return value === "full" ? "full" : "fast";
+}
+
+function normalizeThinkingMode(value) {
+  const mode = normalizeString(value).toLowerCase();
+  if (mode === "show" || mode === "visible" || mode === "显示") return "show";
+  if (mode === "disabled" || mode === "disable" || mode === "off" || mode === "关闭") return "disabled";
+  return "hide";
+}
+
+function normalizeReasoningLevel(value) {
+  const level = normalizeString(value).toLowerCase();
+  if (["minimal", "low", "medium", "high", "xhigh"].includes(level)) return level;
+  if (level === "max") return "xhigh";
+  return "default";
 }
 
 function normalizeLanguage(value) {

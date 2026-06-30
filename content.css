@@ -143,6 +143,31 @@
   box-shadow: none;
 }
 
+.alc-panel.is-floating {
+  top: var(--alc-float-top, 72px);
+  right: var(--alc-float-right, 24px);
+  bottom: auto;
+  width: var(--alc-float-width, 560px);
+  height: var(--alc-float-height, 720px);
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  border: 1px solid var(--alc-line);
+  border-radius: 8px;
+  box-shadow: 0 16px 42px rgba(31, 35, 40, 0.22);
+}
+
+.alc-panel.is-embedded.is-floating {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .alc-header {
   flex: 0 0 auto;
   display: flex;
@@ -152,6 +177,10 @@
   padding: 12px 12px 9px;
   border-bottom: 1px solid var(--alc-line);
   background: var(--alc-header);
+}
+
+.alc-panel.is-floating .alc-header {
+  cursor: move;
 }
 
 .alc-title-block {
@@ -194,8 +223,7 @@
 
 .alc-icon-button {
   flex: 0 0 auto;
-  min-width: 30px;
-  width: auto;
+  width: 30px;
   height: 30px;
   border: 1px solid var(--alc-line);
   border-radius: 6px;
@@ -205,6 +233,7 @@
   font-size: 12px;
   font-weight: 800;
   line-height: 1;
+  text-align: center;
   cursor: pointer;
 }
 
@@ -213,6 +242,54 @@
   padding: 0;
   font-size: 21px;
   font-weight: 400;
+}
+
+.alc-resize-edge,
+.alc-resize-corner {
+  position: absolute;
+  z-index: 2;
+  display: none;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.alc-panel.is-open .alc-resize-edge,
+.alc-panel.is-open.is-floating .alc-resize-corner {
+  display: block;
+}
+
+.alc-resize-edge {
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 10px;
+  cursor: ew-resize;
+}
+
+.alc-resize-corner {
+  left: -7px;
+  bottom: -7px;
+  width: 18px;
+  height: 18px;
+  cursor: nesw-resize;
+}
+
+.alc-resize-corner::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  bottom: 5px;
+  width: 7px;
+  height: 7px;
+  border-left: 2px solid var(--alc-muted);
+  border-bottom: 2px solid var(--alc-muted);
+  opacity: 0.72;
+}
+
+.alc-panel.is-resizing,
+.alc-panel.is-dragging {
+  transition: none;
+  user-select: none;
 }
 
 .alc-toolbar {
@@ -541,6 +618,108 @@
   border: 0;
   border-top: 1px solid var(--alc-line);
   margin: 10px 0;
+}
+
+.alc-message-body .am-math {
+  font-size: 1.04em;
+  line-height: 1.45;
+}
+
+.alc-message-body .am-math-inline {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  vertical-align: -0.2em;
+}
+
+.alc-message-body .am-math-display {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 10px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--alc-line);
+  border-radius: 6px;
+  background: var(--alc-pre);
+}
+
+.alc-message-body .am-math-display .katex-display {
+  margin: 0;
+  text-align: left;
+}
+
+.alc-message-body .am-math-error {
+  color: #b42318;
+  white-space: pre-wrap;
+}
+
+.alc-message-body .am-math-frac {
+  display: inline-grid;
+  grid-template-rows: auto auto;
+  align-items: center;
+  justify-items: center;
+  vertical-align: middle;
+  margin: 0 2px;
+}
+
+.alc-message-body .am-math-frac span:first-child {
+  border-bottom: 1px solid currentColor;
+  padding: 0 3px 1px;
+}
+
+.alc-message-body .am-math-frac span:last-child {
+  padding: 1px 3px 0;
+}
+
+.alc-message-body .am-math-root {
+  display: inline-flex;
+  align-items: stretch;
+  vertical-align: middle;
+}
+
+.alc-message-body .am-math-root span:last-child {
+  border-top: 1px solid currentColor;
+  padding: 0 2px;
+}
+
+.alc-message-body .am-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+
+.alc-message-body table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.alc-message-body th,
+.alc-message-body td {
+  border: 1px solid var(--alc-line);
+  padding: 6px 8px;
+  vertical-align: top;
+}
+
+.alc-message-body th {
+  background: var(--alc-pre);
+  font-weight: 800;
+}
+
+.alc-message-body .am-task-checkbox {
+  appearance: auto;
+  width: auto;
+  margin: 0 6px 0 0;
+  vertical-align: middle;
+}
+
+.alc-message-body .am-markdown-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
 }
 
 .alc-message.is-streaming .alc-message-body::after {

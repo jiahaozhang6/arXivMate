@@ -13,6 +13,10 @@ const downloadUpdateLink = document.querySelector("#download-update");
 const openReleaseLink = document.querySelector("#open-release");
 const globalUpdateBannerNode = document.querySelector("#global-update-banner");
 const projectVersionNode = document.querySelector("#project-version");
+const modelPresetsNode = document.querySelector("#model-presets");
+const exportBackupButton = document.querySelector("#export-backup");
+const importBackupInput = document.querySelector("#import-backup");
+const backupStatusNode = document.querySelector("#backup-status");
 const I18N = window.ArxivMateI18n;
 
 const PROVIDER_PRESETS = {
@@ -47,11 +51,67 @@ const PROVIDER_PRESETS = {
   }
 };
 
+const NUMERIC_FIELD_CONFIG = {
+  temperature: {
+    min: 0,
+    max: 2,
+    step: 0.1,
+    rangeStep: 0.1,
+    fallback: 0.2,
+    decimals: 1
+  },
+  maxOutputTokens: {
+    min: 128,
+    max: (profile) => getModelOutputTokenLimit(profile?.model),
+    step: 1,
+    rangeStep: 1,
+    fallback: 1600,
+    integer: true
+  },
+  inputTokenCap: {
+    min: 1000,
+    max: 1000000,
+    step: 1000,
+    rangeStep: 1000,
+    fallback: (profile) => getModelInputTokenLimit(profile?.model),
+    integer: true
+  },
+  maxContextChars: {
+    min: 4000,
+    max: 60000,
+    step: 1000,
+    rangeStep: 1000,
+    fallback: 14000,
+    integer: true
+  },
+  historyTurns: {
+    min: 0,
+    max: 20,
+    step: 1,
+    rangeStep: 1,
+    fallback: 4,
+    integer: true
+  },
+  historyMessageChars: {
+    min: 400,
+    max: 8000,
+    step: 200,
+    rangeStep: 200,
+    fallback: 1800,
+    integer: true
+  }
+};
+
+const NUMERIC_FIELDS = Object.keys(NUMERIC_FIELD_CONFIG);
+
 let settings = null;
 let profiles = [];
 let selectedProfileId = "";
 let revealApiKey = false;
 let currentLanguage = "system";
+let loadedModelOptions = [];
+const modelLoadCache = new Map();
+const autoLoadedModelKeys = new Set();
 
 syncProjectVersion();
 renderAddProfileProviderOptions();
@@ -67,11 +127,11 @@ addProfileButton.addEventListener("click", () => {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  setStatus(t("testingAllModels"));
+  setStatus(t("saving"));
   setFormBusy(true);
   try {
     await saveCurrentSettings();
-    setStatus(t("settingsSaved"));
+    setStatus(t("settingsSaved", { count: profiles.length }));
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -92,6 +152,9 @@ form.appearance.addEventListener("change", () => {
 checkUpdateButton.addEventListener("click", () => {
   checkForUpdate(true);
 });
+
+exportBackupButton.addEventListener("click", exportBackup);
+importBackupInput.addEventListener("change", importBackup);
 
 async function loadSettings() {
   try {
@@ -119,28 +182,11 @@ async function saveCurrentSettings() {
     modelProfiles: profiles
   };
   settings = await sendMessage({ type: "saveSettings", settings: next });
-  await writeSettingsMirror(settings);
   profiles = normalizeProfiles(settings.modelProfiles, settings);
   if (!profiles.some((profile) => profile.id === selectedProfileId)) {
     selectedProfileId = profiles[0]?.id || "";
   }
   renderProfiles();
-}
-
-function writeSettingsMirror(value) {
-  return new Promise((resolve) => {
-    try {
-      chrome.storage?.local?.set({
-        settingsMirror: {
-          ...(value || {}),
-          savedAt: new Date().toISOString(),
-          extensionVersion: chrome.runtime.getManifest().version
-        }
-      }, resolve);
-    } catch {
-      resolve();
-    }
-  });
 }
 
 function renderProfiles() {
@@ -172,6 +218,10 @@ function renderProfiles() {
     node.addEventListener("input", handleProfileInput);
     node.addEventListener("change", handleProfileInput);
   });
+  profilesNode.querySelectorAll('.profile-editor [data-field="model"]').forEach((node) => {
+    node.addEventListener("focus", handleModelInputFocus);
+  });
+  renderModelDatalist();
 }
 
 function renderProfileListItem(profile) {
@@ -238,7 +288,11 @@ function renderProfileEditor(profile) {
         </label>
         <label>
           <span>${escapeHtml(t("modelName"))}</span>
-          <input data-field="model" list="model-presets" value="${escapeAttr(profile.model)}" placeholder="gpt-4o-mini">
+          <div class="model-row">
+            <input data-field="model" list="model-presets" value="${escapeAttr(profile.model)}" placeholder="gpt-4o-mini">
+            <button type="button" data-action="load-models">${escapeHtml(t("loadModels"))}</button>
+          </div>
+          <small>${escapeHtml(t("loadModelsHelp"))}</small>
         </label>
       </div>
     </section>
@@ -246,43 +300,40 @@ function renderProfileEditor(profile) {
     <section class="profile-section">
       <h3>${escapeHtml(t("generationSettings"))}</h3>
       <div class="profile-grid">
-        <label>
-          <span>Temperature</span>
-          <input data-field="temperature" type="number" min="0" max="2" step="0.1" value="${escapeAttr(profile.temperature)}">
-        </label>
-        <label>
-          <span>${escapeHtml(t("outputTokens"))}</span>
-          <input data-field="maxOutputTokens" type="number" min="128" max="64000" step="1" value="${escapeAttr(profile.maxOutputTokens)}">
-        </label>
+        ${renderNumericControl(profile, "temperature", "Temperature")}
+        ${renderNumericControl(profile, "maxOutputTokens", t("outputTokens"))}
       </div>
     </section>
 
     <details class="profile-advanced" open>
       <summary>${escapeHtml(t("advanced"))}</summary>
       <div class="profile-grid">
-        <label>
-          <span>${escapeHtml(t("contextWindowTokens"))}</span>
-          <input data-field="inputTokenCap" type="number" min="1000" max="1000000" step="1000" value="${escapeAttr(profile.inputTokenCap)}">
-          <small>${escapeHtml(t("contextWindowHelp"))}</small>
-        </label>
-        <label>
-          <span>${escapeHtml(t("bodyChars"))}</span>
-          <input data-field="maxContextChars" type="number" min="4000" max="60000" step="1000" value="${escapeAttr(profile.maxContextChars)}">
-        </label>
-        <label>
-          <span>${escapeHtml(t("historyTurns"))}</span>
-          <input data-field="historyTurns" type="number" min="0" max="20" step="1" value="${escapeAttr(profile.historyTurns)}">
-        </label>
-        <label>
-          <span>${escapeHtml(t("historyMessageChars"))}</span>
-          <input data-field="historyMessageChars" type="number" min="400" max="8000" step="200" value="${escapeAttr(profile.historyMessageChars)}">
-        </label>
+        ${renderNumericControl(profile, "inputTokenCap", t("contextWindowTokens"), t("contextWindowHelp"))}
+        ${renderNumericControl(profile, "maxContextChars", t("bodyChars"))}
+        ${renderNumericControl(profile, "historyTurns", t("historyTurns"))}
+        ${renderNumericControl(profile, "historyMessageChars", t("historyMessageChars"))}
         <label>
           <span>${escapeHtml(t("defaultContext"))}</span>
           <select data-field="defaultContextMode">
             <option value="fast" ${profile.defaultContextMode !== "full" ? "selected" : ""}>${escapeHtml(t("fastContext"))}</option>
             <option value="full" ${profile.defaultContextMode === "full" ? "selected" : ""}>${escapeHtml(t("fullContext"))}</option>
           </select>
+        </label>
+        <label>
+          <span>${escapeHtml(t("thinkingOutput"))}</span>
+          <select data-field="thinkingMode">
+            <option value="hide" ${profile.thinkingMode !== "show" && profile.thinkingMode !== "disabled" ? "selected" : ""}>${escapeHtml(t("thinkingHide"))}</option>
+            <option value="show" ${profile.thinkingMode === "show" ? "selected" : ""}>${escapeHtml(t("thinkingShow"))}</option>
+            <option value="disabled" ${profile.thinkingMode === "disabled" ? "selected" : ""}>${escapeHtml(t("thinkingDisabled"))}</option>
+          </select>
+          <small>${escapeHtml(t("thinkingOutputHelp"))}</small>
+        </label>
+        <label>
+          <span>${escapeHtml(t("reasoningLevel"))}</span>
+          <select data-field="reasoningLevel">
+            ${renderReasoningLevelOptions(profile.reasoningLevel)}
+          </select>
+          <small>${escapeHtml(t("reasoningLevelHelp"))}</small>
         </label>
         <label class="checkbox">
           <input data-field="useAr5iv" type="checkbox" ${profile.useAr5iv ? "checked" : ""}>
@@ -291,6 +342,176 @@ function renderProfileEditor(profile) {
       </div>
     </details>
   `;
+}
+
+function renderNumericControl(profile, field, label, helpText = "") {
+  const config = getNumericConfig(field, profile);
+  const value = normalizeNumericField(field, profile?.[field], profile);
+  profile[field] = value;
+  const rangeValue = clampForRange(value, config);
+  const note = t("numericRange", {
+    min: formatNumericValue(config.min, field),
+    max: formatNumericValue(config.max, field)
+  });
+  return `
+    <label class="numeric-control">
+      <span>${escapeHtml(label)}</span>
+      <div class="numeric-input-row">
+        <input
+          data-field="${escapeAttr(field)}"
+          data-numeric-input="number"
+          type="number"
+          min="${escapeAttr(config.min)}"
+          max="${escapeAttr(config.max)}"
+          step="${escapeAttr(config.step)}"
+          value="${escapeAttr(formatNumericValue(value, field))}"
+          inputmode="${config.integer ? "numeric" : "decimal"}"
+        >
+        <small class="numeric-range-note" data-numeric-range-note="${escapeAttr(field)}">${escapeHtml(note)}</small>
+      </div>
+      <input
+        class="numeric-slider"
+        data-field="${escapeAttr(field)}"
+        data-numeric-input="range"
+        type="range"
+        min="${escapeAttr(config.min)}"
+        max="${escapeAttr(config.max)}"
+        step="${escapeAttr(config.rangeStep)}"
+        value="${escapeAttr(formatNumericValue(rangeValue, field))}"
+        aria-label="${escapeAttr(label)}"
+      >
+      ${helpText ? `<small>${escapeHtml(helpText)}</small>` : ""}
+    </label>
+  `;
+}
+
+function updateNumericProfileField(card, profile, field, target, eventType) {
+  const config = getNumericConfig(field, profile);
+  const parsed = Number(target.value);
+  const isRange = target.dataset.numericInput === "range";
+
+  if (!Number.isFinite(parsed)) {
+    if (eventType === "change") {
+      const value = normalizeNumericField(field, target.value, profile);
+      profile[field] = value;
+      writeNumericControlValue(card, field, value);
+    }
+    return;
+  }
+
+  const shouldClampHigh = parsed > config.max;
+  const shouldClampLow = parsed < config.min && (isRange || eventType !== "input");
+  if (parsed < config.min && !shouldClampLow) {
+    return;
+  }
+
+  const value = shouldClampHigh || shouldClampLow || isRange || eventType !== "input"
+    ? clampNumber(parsed, config)
+    : normalizeNumericField(field, parsed, profile);
+
+  profile[field] = value;
+
+  if (isRange || eventType !== "input" || shouldClampHigh || shouldClampLow) {
+    writeNumericControlValue(card, field, value);
+    return;
+  }
+
+  writeNumericControlValue(card, field, value, { updateNumber: false });
+}
+
+function syncNumericControls(card, profile) {
+  NUMERIC_FIELDS.forEach((field) => {
+    const config = getNumericConfig(field, profile);
+    const value = normalizeNumericField(field, profile[field], profile);
+    profile[field] = value;
+    card.querySelectorAll(`[data-field="${field}"]`).forEach((node) => {
+      node.min = String(config.min);
+      node.max = String(config.max);
+      node.step = String(node.dataset.numericInput === "range" ? config.rangeStep : config.step);
+    });
+    const note = card.querySelector(`[data-numeric-range-note="${field}"]`);
+    if (note) {
+      note.textContent = t("numericRange", {
+        min: formatNumericValue(config.min, field),
+        max: formatNumericValue(config.max, field)
+      });
+    }
+    writeNumericControlValue(card, field, value);
+  });
+}
+
+function writeNumericControlValue(card, field, value, { updateNumber = true, updateRange = true } = {}) {
+  const formatted = formatNumericValue(value, field);
+  if (updateNumber) {
+    const numberInput = card.querySelector(`[data-field="${field}"][data-numeric-input="number"]`);
+    if (numberInput && numberInput.value !== formatted) {
+      numberInput.value = formatted;
+    }
+  }
+  if (updateRange) {
+    const rangeInput = card.querySelector(`[data-field="${field}"][data-numeric-input="range"]`);
+    if (rangeInput) {
+      const config = getNumericConfig(field, profiles.find((item) => item.id === card.dataset.id));
+      const rangeValue = formatNumericValue(clampForRange(value, config), field);
+      if (rangeInput.value !== rangeValue) {
+        rangeInput.value = rangeValue;
+      }
+    }
+  }
+}
+
+function normalizeProfileNumbers(profile) {
+  if (!profile) return profile;
+  NUMERIC_FIELDS.forEach((field) => {
+    profile[field] = normalizeNumericField(field, profile[field], profile);
+  });
+  return profile;
+}
+
+function normalizeNumericField(field, value, profile) {
+  return clampNumber(value, getNumericConfig(field, profile));
+}
+
+function getNumericConfig(field, profile) {
+  const base = NUMERIC_FIELD_CONFIG[field];
+  const min = resolveNumericOption(base.min, profile);
+  const max = Math.max(min, resolveNumericOption(base.max, profile));
+  const fallback = clampNumberLoose(resolveNumericOption(base.fallback, profile), min, max, base.integer);
+  return {
+    ...base,
+    min,
+    max,
+    fallback,
+    step: base.step,
+    rangeStep: base.rangeStep || base.step
+  };
+}
+
+function resolveNumericOption(value, profile) {
+  return typeof value === "function" ? value(profile || {}) : value;
+}
+
+function clampNumber(value, config) {
+  return clampNumberLoose(value, config.min, config.max, config.integer, config.fallback);
+}
+
+function clampNumberLoose(value, min, max, integer, fallback = min) {
+  const parsed = Number(value);
+  const base = Number.isFinite(parsed) ? parsed : Number(fallback);
+  const bounded = Math.min(max, Math.max(min, Number.isFinite(base) ? base : min));
+  return integer ? Math.floor(bounded) : bounded;
+}
+
+function clampForRange(value, config) {
+  return clampNumber(value, config);
+}
+
+function formatNumericValue(value, field) {
+  const config = NUMERIC_FIELD_CONFIG[field];
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "";
+  if (config?.integer) return String(Math.floor(parsed));
+  return String(Number(parsed.toFixed(3)));
 }
 
 function handleProfileInput(event) {
@@ -315,15 +536,14 @@ function handleProfileInput(event) {
     }
     revealApiKey = false;
     renderProfiles();
+    autoLoadModelsForProfile(profile, { silent: true });
     return;
   }
 
-  if (field === "useAr5iv") {
+  if (NUMERIC_FIELDS.includes(field)) {
+    updateNumericProfileField(card, profile, field, event.target, event.type);
+  } else if (field === "useAr5iv") {
     profile.useAr5iv = event.target.checked;
-  } else if (field === "temperature") {
-    profile.temperature = Number(event.target.value);
-  } else if (["maxContextChars", "maxOutputTokens", "inputTokenCap", "historyTurns", "historyMessageChars"].includes(field)) {
-    profile[field] = Number(event.target.value);
   } else {
     profile[field] = event.target.value;
   }
@@ -334,6 +554,11 @@ function handleProfileInput(event) {
     if (providerSelect && providerSelect.value !== profile.provider) {
       providerSelect.value = profile.provider;
     }
+  }
+
+  if (field === "model" && event.type !== "input") {
+    normalizeProfileNumbers(profile);
+    syncNumericControls(card, profile);
   }
 }
 
@@ -352,6 +577,11 @@ function handleProfileAction(event) {
 
   if (action === "test-profile") {
     testProfile(id);
+    return;
+  }
+
+  if (action === "load-models") {
+    loadModelsForProfile(id);
     return;
   }
 
@@ -385,6 +615,13 @@ function handleProfileAction(event) {
   }
 }
 
+function handleModelInputFocus(event) {
+  const card = event.target.closest(".profile-editor");
+  const profile = profiles.find((item) => item.id === card?.dataset.id);
+  if (!profile) return;
+  autoLoadModelsForProfile(profile, { silent: true });
+}
+
 async function testProfile(id) {
   readSelectedProfileFromDom();
   selectedProfileId = id;
@@ -405,8 +642,89 @@ async function testProfile(id) {
   }
 }
 
-function setFormBusy(isBusy) {
+async function loadModelsForProfile(id, { silent = false, force = true } = {}) {
+  readSelectedProfileFromDom();
+  selectedProfileId = id;
+  const profile = profiles.find((item) => item.id === id);
+  if (!profile) return [];
+  const cacheKey = buildModelLoadCacheKey(profile);
+  if (!force && modelLoadCache.has(cacheKey)) {
+    const cached = modelLoadCache.get(cacheKey);
+    mergeLoadedModelOptions(cached);
+    return cached;
+  }
+  if (!profile.baseUrl) {
+    if (!silent) setStatus(t("modelLoadMissingBaseUrl"), true);
+    return [];
+  }
+  if (!silent) setStatus(t("loadingModels"));
+  if (!silent) setFormBusy(true);
+  try {
+    const response = await sendMessage({
+      type: "listModelsForProfile",
+      profile
+    });
+    const models = Array.isArray(response.models) ? response.models : [];
+    modelLoadCache.set(cacheKey, models);
+    autoLoadedModelKeys.add(cacheKey);
+    mergeLoadedModelOptions(models);
+    if (models.length && !profile.model) {
+      profile.model = models[0];
+      renderProfiles();
+    }
+    if (!silent) setStatus(t("modelsLoaded", { count: models.length }));
+    return models;
+  } catch (error) {
+    if (!silent) {
+      setStatus(error.message || String(error), true);
+    }
+    return [];
+  } finally {
+    if (!silent) setFormBusy(false);
+  }
+}
+
+function autoLoadModelsForProfile(profile, { silent = true } = {}) {
+  const cacheKey = buildModelLoadCacheKey(profile);
+  if (!profile.baseUrl || autoLoadedModelKeys.has(cacheKey)) return;
+  autoLoadedModelKeys.add(cacheKey);
+  loadModelsForProfile(profile.id, { silent, force: false });
+}
+
+function buildModelLoadCacheKey(profile) {
+  return [
+    String(profile.baseUrl || "").replace(/\/+$/, "").toLowerCase(),
+    String(profile.provider || ""),
+    String(profile.apiKey || "").slice(0, 10)
+  ].join("|");
+}
+
+function mergeLoadedModelOptions(models) {
+  loadedModelOptions = [...new Set([
+    ...loadedModelOptions,
+    ...models.map((model) => String(model || "").trim()).filter(Boolean)
+  ])].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+  renderModelDatalist();
+}
+
+function renderModelDatalist() {
+  if (!modelPresetsNode) return;
+  const presetModels = Object.values(PROVIDER_PRESETS).map((preset) => preset.model).filter(Boolean);
+  const currentModels = profiles.map((profile) => profile.model).filter(Boolean);
+  const models = [...new Set([...presetModels, ...currentModels, ...loadedModelOptions])]
+    .map((model) => String(model || "").trim())
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+  modelPresetsNode.replaceChildren(...models.map((model) => {
+    const option = document.createElement("option");
+    option.value = model;
+    return option;
+  }));
+}
+
+function setFormBusy(isBusy, options = {}) {
   form.querySelectorAll("button, input, select").forEach((node) => {
+    if (options.keepModelLoadButtons && node.dataset.action === "load-models") return;
     node.disabled = Boolean(isBusy);
   });
 }
@@ -426,15 +744,15 @@ function readSelectedProfileFromDom() {
     baseUrl,
     apiKey: get("apiKey")?.value || "",
     model: get("model")?.value || "",
-    temperature: Number(get("temperature")?.value),
-    maxOutputTokens: Number(get("maxOutputTokens")?.value),
-    inputTokenCap: Number(get("inputTokenCap")?.value),
-    maxContextChars: Number(get("maxContextChars")?.value),
-    historyTurns: Number(get("historyTurns")?.value),
-    historyMessageChars: Number(get("historyMessageChars")?.value),
     defaultContextMode: get("defaultContextMode")?.value || "fast",
+    thinkingMode: normalizeThinkingMode(get("thinkingMode")?.value),
+    reasoningLevel: normalizeReasoningLevel(get("reasoningLevel")?.value),
     useAr5iv: Boolean(get("useAr5iv")?.checked)
   });
+  NUMERIC_FIELDS.forEach((field) => {
+    profile[field] = normalizeNumericField(field, get(field)?.value, profile);
+  });
+  syncNumericControls(card, profile);
 }
 
 function normalizeProfiles(value, fallbackSettings) {
@@ -442,7 +760,7 @@ function normalizeProfiles(value, fallbackSettings) {
   if (list.length) {
     return list.map((profile) => {
       const inferredProvider = inferProvider(profile.baseUrl);
-      return {
+      return normalizeProfileNumbers({
         id: profile.id || createId(),
         name: profile.name || profile.model || "Model",
         provider: inferredProvider !== "custom" ? inferredProvider : (profile.provider || "custom"),
@@ -456,14 +774,16 @@ function normalizeProfiles(value, fallbackSettings) {
         historyTurns: Number(profile.historyTurns ?? 4),
         historyMessageChars: Number(profile.historyMessageChars ?? 1800),
         defaultContextMode: profile.defaultContextMode === "full" ? "full" : "fast",
+        thinkingMode: normalizeThinkingMode(profile.thinkingMode),
+        reasoningLevel: normalizeReasoningLevel(profile.reasoningLevel),
         useAr5iv: profile.useAr5iv !== false
-      };
+      });
     });
   }
   const hasLegacyConfig = Boolean(fallbackSettings?.baseUrl || fallbackSettings?.apiKey || fallbackSettings?.model);
   if (!hasLegacyConfig) return [];
   const inferredProvider = inferProvider(fallbackSettings.baseUrl);
-  return [{
+  return [normalizeProfileNumbers({
     id: "profile-migrated",
     name: "Migrated model",
     provider: inferredProvider !== "custom" ? inferredProvider : (fallbackSettings.provider || "custom"),
@@ -477,13 +797,15 @@ function normalizeProfiles(value, fallbackSettings) {
     historyTurns: Number(fallbackSettings.historyTurns ?? 4),
     historyMessageChars: Number(fallbackSettings.historyMessageChars ?? 1800),
     defaultContextMode: fallbackSettings.defaultContextMode === "full" ? "full" : "fast",
+    thinkingMode: normalizeThinkingMode(fallbackSettings.thinkingMode),
+    reasoningLevel: normalizeReasoningLevel(fallbackSettings.reasoningLevel),
     useAr5iv: fallbackSettings.useAr5iv !== false
-  }];
+  })];
 }
 
 function createProfile(provider) {
   const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
-  return {
+  return normalizeProfileNumbers({
     id: createId(),
     name: providerDisplayName(provider),
     provider,
@@ -497,8 +819,10 @@ function createProfile(provider) {
     historyTurns: provider === "ollama" ? 3 : 4,
     historyMessageChars: provider === "ollama" ? 1200 : 1800,
     defaultContextMode: "fast",
+    thinkingMode: "hide",
+    reasoningLevel: defaultReasoningLevel(provider, preset.model),
     useAr5iv: true
-  };
+  });
 }
 
 function renderAddProfileProviderOptions() {
@@ -521,13 +845,72 @@ function providerDisplayNames(provider) {
   return [...new Set([preset.label, preset.labelZh, preset.labelEn].filter(Boolean))];
 }
 
-function inferInputTokenCap(model) {
+function renderReasoningLevelOptions(selectedValue) {
+  const selected = normalizeReasoningLevel(selectedValue);
+  const options = [
+    ["default", t("reasoningDefault")],
+    ["minimal", t("reasoningMinimal")],
+    ["low", t("reasoningLow")],
+    ["medium", t("reasoningMedium")],
+    ["high", t("reasoningHigh")],
+    ["xhigh", t("reasoningXHigh")]
+  ];
+  return options.map(([value, label]) => `
+    <option value="${value}" ${selected === value ? "selected" : ""}>${escapeHtml(label)}</option>
+  `).join("");
+}
+
+function defaultReasoningLevel(provider, model) {
   const name = String(model || "").toLowerCase();
-  if (name.startsWith("deepseek")) return 128000;
-  if (name.startsWith("minimax")) return 128000;
-  if (name.startsWith("gpt-4o")) return 128000;
-  if (name.includes("llama")) return 16000;
+  if (provider === "deepseek" && (/^deepseek-v4-(flash|pro)/.test(name) || /^deepseek-(reasoner|r1)/.test(name))) {
+    return "default";
+  }
+  return "default";
+}
+
+function normalizeThinkingMode(value) {
+  const mode = String(value || "").trim().toLowerCase();
+  if (mode === "show") return "show";
+  if (mode === "disabled" || mode === "disable" || mode === "off") return "disabled";
+  return "hide";
+}
+
+function normalizeReasoningLevel(value) {
+  const level = String(value || "").trim().toLowerCase();
+  if (["minimal", "low", "medium", "high", "xhigh"].includes(level)) return level;
+  if (level === "max") return "xhigh";
+  return "default";
+}
+
+function inferInputTokenCap(model) {
+  return getModelInputTokenLimit(model);
+}
+
+function getModelInputTokenLimit(model) {
+  const name = normalizeModelName(model);
+  if (/^deepseek-v4-(flash|pro)/.test(name) || /^deepseek-(chat|reasoner)/.test(name)) return 1000000;
+  if (/^gpt-4o/.test(name)) return 128000;
+  if (/^gpt-5/.test(name)) return 400000;
+  if (/^o(1|3)/.test(name)) return 200000;
+  if (/^gemini-(1\.5|2\.5|3)/.test(name)) return 1000000;
+  if (/^claude/.test(name)) return 200000;
+  if (/^qwen-long/.test(name)) return 1000000;
+  if (/^qwen/.test(name)) return 128000;
+  if (/llama|mistral|mixtral|ollama/.test(name)) return 16000;
   return 32000;
+}
+
+function getModelOutputTokenLimit(model) {
+  const name = normalizeModelName(model);
+  if (/^deepseek-v4-(flash|pro)/.test(name) || /^deepseek-(chat|reasoner)/.test(name)) return 64000;
+  if (/^claude/.test(name)) return 64000;
+  if (/^gpt-5/.test(name)) return 32768;
+  if (/^gpt-4o/.test(name)) return 16384;
+  return 8192;
+}
+
+function normalizeModelName(model) {
+  return String(model || "").replace(/\s+/g, " ").trim().toLowerCase().split("/").pop() || "";
 }
 
 function normalizeLanguage(value) {
@@ -607,6 +990,68 @@ async function checkForUpdate(force) {
   } finally {
     checkUpdateButton.disabled = false;
   }
+}
+
+async function exportBackup() {
+  setBackupStatus(t("exportingBackup"));
+  exportBackupButton.disabled = true;
+  try {
+    const backup = await sendMessage({ type: "exportLocalData" });
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `arxivmate-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setBackupStatus(t("backupExported"));
+  } catch (error) {
+    setBackupStatus(error.message || String(error), true);
+  } finally {
+    exportBackupButton.disabled = false;
+  }
+}
+
+async function importBackup(event) {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  if (!confirm(t("confirmImportBackup"))) return;
+  setBackupStatus(t("importingBackup"));
+  setFormBusy(true);
+  try {
+    const text = await file.text();
+    const result = await sendMessage({
+      type: "importLocalData",
+      backup: text
+    });
+    settings = result.settings;
+    profiles = normalizeProfiles(result.modelProfiles, settings);
+    selectedProfileId = profiles[0]?.id || "";
+    form.language.value = normalizeLanguage(settings.language);
+    currentLanguage = form.language.value;
+    form.appearance.value = normalizeAppearance(settings.appearance);
+    applyAppearance(form.appearance.value);
+    applyLanguage(currentLanguage);
+    renderProfiles();
+    setBackupStatus(t("backupImported", {
+      models: profiles.length,
+      conversations: result.conversations || 0,
+      notes: result.notes || 0
+    }));
+  } catch (error) {
+    setBackupStatus(error.message || String(error), true);
+  } finally {
+    setFormBusy(false);
+  }
+}
+
+function setBackupStatus(text, isError = false) {
+  if (!backupStatusNode) return;
+  backupStatusNode.textContent = text || "";
+  backupStatusNode.classList.toggle("is-error", Boolean(isError));
 }
 
 function renderUpdateStatus(result) {

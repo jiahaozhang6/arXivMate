@@ -38,10 +38,16 @@ function applyLanguage() {
 
 function updateTabStatus() {
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-    if (/https:\/\/(www\.)?arxiv\.org\/(abs|pdf)\//i.test(tab?.url || "")) {
+    if (isSupportedPaperTab(tab?.url || "")) {
       statusNode.textContent = t("popupStatusArxiv");
     }
   });
+}
+
+function isSupportedPaperTab(url) {
+  const value = String(url || "");
+  return /https?:\/\/(www\.)?arxiv\.org\/(abs|pdf)\//i.test(value) ||
+    /\.pdf(?:[?#]|$)/i.test(value);
 }
 
 function renderUpdateBanner() {

@@ -214,6 +214,12 @@ label span,
   line-height: 1.55;
 }
 
+.backup-panel p {
+  margin: 0 0 14px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
 .project-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -353,6 +359,14 @@ input:focus,
 select:focus {
   outline: 2px solid var(--focus);
   border-color: var(--accent);
+}
+
+input[type="range"] {
+  height: 24px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  accent-color: var(--accent);
 }
 
 small {
@@ -536,14 +550,45 @@ small {
   padding-top: 0;
 }
 
-.secret-row {
+.numeric-control {
+  align-content: start;
+}
+
+.numeric-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.numeric-range-note {
+  min-width: 86px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.numeric-slider {
+  margin-top: -2px;
+}
+
+.secret-row,
+.model-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
 }
 
-.secret-row button {
+.secret-row button,
+.model-row button {
   padding: 0 12px;
+  white-space: nowrap;
 }
 
 .checkbox {
@@ -601,7 +646,14 @@ button:disabled {
   color: var(--muted);
 }
 
-#status.is-error {
+#backup-status {
+  min-height: 22px;
+  margin: 0;
+  color: var(--muted);
+}
+
+#status.is-error,
+#backup-status.is-error {
   color: var(--error);
 }
 
@@ -630,7 +682,9 @@ ul {
 
   .add-profile-controls,
   .profile-editor-actions,
-  .secret-row {
+  .numeric-input-row,
+  .secret-row,
+  .model-row {
     grid-template-columns: 1fr;
     flex-direction: column;
     align-items: stretch;

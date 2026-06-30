@@ -1,0 +1,176 @@
+window.ArxivMateMarkdown = (() => {
+  let renderer = null;
+
+  function toHtml(markdown, options = {}) {
+    const source = window.ArxivMateMath?.normalizeLooseMath
+      ? window.ArxivMateMath.normalizeLooseMath(String(markdown || ""))
+      : String(markdown || "");
+    const math = window.ArxivMateMath?.extractMath
+      ? window.ArxivMateMath.extractMath(source)
+      : { text: source, segments: [] };
+    const md = getRenderer();
+
+    if (!md) {
+      const fallback = fallbackToHtml(math.text, options);
+      return window.ArxivMateMath?.restoreMath
+        ? window.ArxivMateMath.restoreMath(fallback, math.segments)
+        : fallback;
+    }
+
+    const html = md.render(math.text, {
+      headingOffset: Number.isFinite(options.headingOffset) ? options.headingOffset : 0
+    });
+    return window.ArxivMateMath?.restoreMath
+      ? window.ArxivMateMath.restoreMath(html, math.segments)
+      : html;
+  }
+
+  function getRenderer() {
+    if (renderer) return renderer;
+    const MarkdownIt = window.markdownit || globalThis.markdownit;
+    if (!MarkdownIt) return null;
+
+    renderer = MarkdownIt({
+      html: false,
+      linkify: true,
+      typographer: false,
+      breaks: false
+    });
+
+    renderer.validateLink = (url) => isSafeUrl(url);
+    installHeadingOffset(renderer);
+    installLinkAttributes(renderer);
+    installImageAttributes(renderer);
+    installTableWrapper(renderer);
+    installTaskLists(renderer);
+    return renderer;
+  }
+
+  function installHeadingOffset(md) {
+    md.renderer.rules.heading_open = (tokens, index, options, env, self) => {
+      tokens[index].tag = offsetHeadingTag(tokens[index].tag, env.headingOffset);
+      return self.renderToken(tokens, index, options);
+    };
+    md.renderer.rules.heading_close = (tokens, index, options, env, self) => {
+      tokens[index].tag = offsetHeadingTag(tokens[index].tag, env.headingOffset);
+      return self.renderToken(tokens, index, options);
+    };
+  }
+
+  function installLinkAttributes(md) {
+    const defaultRender = md.renderer.rules.link_open || renderToken;
+    md.renderer.rules.link_open = (tokens, index, options, env, self) => {
+      const href = tokens[index].attrGet("href") || "";
+      if (!isSafeUrl(href)) {
+        tokens[index].attrSet("href", "#");
+      }
+      tokens[index].attrSet("target", "_blank");
+      tokens[index].attrSet("rel", "noreferrer");
+      return defaultRender(tokens, index, options, env, self);
+    };
+  }
+
+  function installImageAttributes(md) {
+    const defaultRender = md.renderer.rules.image || renderToken;
+    md.renderer.rules.image = (tokens, index, options, env, self) => {
+      const token = tokens[index];
+      token.attrJoin("class", "am-markdown-image");
+      token.attrSet("loading", "lazy");
+      token.attrSet("decoding", "async");
+      return defaultRender(tokens, index, options, env, self);
+    };
+  }
+
+  function installTableWrapper(md) {
+    md.renderer.rules.table_open = () => '<div class="am-table-wrap"><table>';
+    md.renderer.rules.table_close = () => "</table></div>";
+  }
+
+  function installTaskLists(md) {
+    md.core.ruler.after("inline", "arxivmate_task_lists", (state) => {
+      const tokens = state.tokens;
+      for (let index = 0; index < tokens.length; index += 1) {
+        const token = tokens[index];
+        if (token.type !== "inline" || !token.children?.length) continue;
+        if (tokens[index - 1]?.type !== "paragraph_open" || tokens[index - 2]?.type !== "list_item_open") continue;
+
+        const first = token.children[0];
+        if (first.type !== "text") continue;
+
+        const match = first.content.match(/^\[([ xX])\]\s+/);
+        if (!match) continue;
+
+        first.content = first.content.slice(match[0].length);
+        const checkbox = new state.Token("html_inline", "", 0);
+        checkbox.content = `<input class="am-task-checkbox" type="checkbox" disabled ${/[xX]/.test(match[1]) ? "checked " : ""}aria-hidden="true">`;
+        token.children.unshift(checkbox);
+        tokens[index - 2].attrJoin("class", "am-task-list-item");
+      }
+    });
+  }
+
+  function offsetHeadingTag(tag, offset) {
+    const current = Number(String(tag || "").replace(/^h/i, ""));
+    if (!Number.isFinite(current)) return tag;
+    const level = Math.max(1, Math.min(6, current + (Number(offset) || 0)));
+    return `h${level}`;
+  }
+
+  function renderToken(tokens, index, options, _env, self) {
+    return self.renderToken(tokens, index, options);
+  }
+
+  function fallbackToHtml(markdown, options) {
+    const headingOffset = Number.isFinite(options.headingOffset) ? options.headingOffset : 0;
+    const lines = String(markdown || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    const html = [];
+    let paragraph = [];
+
+    const flushParagraph = () => {
+      if (!paragraph.length) return;
+      html.push(`<p>${escapeHtml(paragraph.join(" "))}</p>`);
+      paragraph = [];
+    };
+
+    for (const rawLine of lines) {
+      const line = rawLine.trimEnd();
+      const trimmed = line.trim();
+      if (!trimmed) {
+        flushParagraph();
+        continue;
+      }
+
+      const heading = trimmed.match(/^(#{1,6})\s+(.+?)\s*#*$/);
+      if (heading) {
+        flushParagraph();
+        const level = Math.max(1, Math.min(6, heading[1].length + headingOffset));
+        html.push(`<h${level}>${escapeHtml(heading[2])}</h${level}>`);
+        continue;
+      }
+
+      paragraph.push(trimmed);
+    }
+
+    flushParagraph();
+    return html.join("");
+  }
+
+  function isSafeUrl(url) {
+    const value = String(url || "").trim().replace(/[\u0000-\u001F\u007F\s]+/g, "");
+    if (!value) return false;
+    return /^(https?:\/\/|mailto:|#)/i.test(value);
+  }
+
+  function escapeHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  return {
+    toHtml
+  };
+})();

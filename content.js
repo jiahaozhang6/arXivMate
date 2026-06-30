@@ -1,10 +1,15 @@
 (function () {
   if (!isRuntimeAvailable()) return;
   const I18N = window.ArxivMateI18n;
+  const PANEL_LAYOUT_STORAGE_KEY = "panelLayout";
   const embeddedPanelPaper = readEmbeddedPanelPaper();
   const isEmbeddedPanel = Boolean(embeddedPanelPaper);
   let paper = embeddedPanelPaper || extractPaper();
+  if (!isEmbeddedPanel && !isSupportedReadingPage(paper)) return;
+  if (!paper.id) paper = ensureDocumentIdentity(paper);
   if (!paper.id && !paper.title) return;
+
+  removeExistingArxivMateRoots();
 
   if (!isEmbeddedPanel && isPdfPage()) {
     installIframePanel(paper);
@@ -15,27 +20,35 @@
   let currentResult = "";
   let currentMode = "quick";
   let isPanelOpen = false;
-  let useFullTextNext = false;
   let currentSettings = null;
+  let lastKnownModelProfiles = [];
   let selectedProfileId = "";
   let selectedModelLabel = "";
   let renderTimer = 0;
   let activeStreamCancel = null;
   let isGenerating = false;
   let settingsRefreshPromise = null;
-  let settingsSourceStats = { runtime: 0, sync: 0, mirror: 0, selected: "none" };
   let activeAppearance = "system";
   let currentLanguage = "system";
   let systemAppearanceQuery = null;
   let systemAppearanceListenerInstalled = false;
+  let panelLayout = getDefaultPanelLayout();
+  let panelLayoutSaveTimer = 0;
+  let embeddedLayoutMode = "dock";
 
   const host = document.createElement("div");
   host.id = "arxiv-llm-companion-root";
+  host.dataset.extensionId = chrome.runtime.id || "";
   const shadow = host.attachShadow({ mode: "open" });
   document.documentElement.appendChild(host);
   if (!isEmbeddedPanel) {
     installPageSplitStyles();
   }
+
+  const mathStyle = document.createElement("link");
+  mathStyle.rel = "stylesheet";
+  mathStyle.href = runtimeUrl("vendor/katex/katex.min.css");
+  shadow.appendChild(mathStyle);
 
   const style = document.createElement("link");
   style.rel = "stylesheet";
@@ -53,6 +66,8 @@
           <div class="alc-meta"></div>
         </div>
         <div class="alc-header-actions">
+          <button class="alc-icon-button alc-layout-toggle" type="button" title="浮动窗口" data-i18n-title="floatPanel">⇱</button>
+          <button class="alc-icon-button alc-restore-layout" type="button" title="还原尺寸" data-i18n-title="restorePanel">↺</button>
           <button class="alc-icon-button alc-close" type="button" title="折叠分屏" data-i18n-title="closeSplit">×</button>
         </div>
       </header>
@@ -68,8 +83,8 @@
             <span data-i18n="chatModel">模型</span>
             <select class="alc-model-select" title="切换当前聊天模型" data-i18n-title="switchChatModel"></select>
           </label>
-          <label class="alc-toggle" title="下一次请求优先抽取当前 PDF 文本，失败时再尝试 ar5iv，速度会慢一些" data-i18n-title="fullTextTitle">
-            <input class="alc-fulltext" type="checkbox">
+          <label class="alc-toggle" title="聊天会优先抽取 PDF/正文全文；arXiv 页面失败时可再尝试 ar5iv，速度会慢一些" data-i18n-title="fullTextTitle">
+            <input class="alc-fulltext" type="checkbox" checked disabled>
             <span data-i18n="fullText">全文</span>
           </label>
           <button class="alc-copy" type="button" title="复制 Markdown" data-i18n="copy" data-i18n-title="copyMarkdown">复制</button>
@@ -90,6 +105,8 @@
         <button class="alc-send" data-mode="ask" type="button" data-i18n="send">发送</button>
       </footer>
       <div class="alc-status" role="status"></div>
+      <div class="alc-resize-edge" title="拖拽调整面板宽度" data-i18n-title="resizePanel" aria-hidden="true"></div>
+      <div class="alc-resize-corner" title="拖拽调整浮动窗口大小" data-i18n-title="resizeFloatingPanel" aria-hidden="true"></div>
     </section>
   `;
   shadow.appendChild(wrapper);
@@ -97,6 +114,7 @@
   const $ = (selector) => shadow.querySelector(selector);
   const fab = $(".alc-fab");
   const panel = $(".alc-panel");
+  const panelHeader = $(".alc-header");
   const title = $("h2");
   const meta = $(".alc-meta");
   const input = $(".alc-composer textarea");
@@ -106,9 +124,16 @@
   const fullTextToggle = $(".alc-fulltext");
   const modelSelect = $(".alc-model-select");
   const sendButton = $(".alc-send");
+  const layoutToggleButton = $(".alc-layout-toggle");
+  const restoreLayoutButton = $(".alc-restore-layout");
+  const resizeEdge = $(".alc-resize-edge");
+  const resizeCorner = $(".alc-resize-corner");
+  fullTextToggle.checked = true;
+  fullTextToggle.disabled = true;
 
   applyLanguage(currentLanguage);
   installPanelEventGuards();
+  installPanelLayoutControls();
   installSettingsChangeListener();
 
   renderPaperHeader();
@@ -132,16 +157,14 @@
   onClick(".alc-copy", copyCurrentMarkdown);
   onClick(".alc-save", saveCurrentNote);
   onClick(".alc-clear-chat", clearCurrentConversation);
-  fullTextToggle.addEventListener("change", () => {
-    useFullTextNext = fullTextToggle.checked;
-    setStatus(useFullTextNext ? t("fullTextOn") : t("fullTextOff"));
-  });
+  onClick(".alc-layout-toggle", togglePanelLayoutMode);
+  onClick(".alc-restore-layout", restorePanelLayout);
   modelSelect.addEventListener("change", switchChatModel);
   modelSelect.addEventListener("pointerdown", () => {
-    refreshSettings({ silent: true }).catch(() => {});
+    forceRefreshSettingsFromLocal().catch(() => {});
   });
   modelSelect.addEventListener("focus", () => {
-    refreshSettings({ silent: true }).catch(() => {});
+    forceRefreshSettingsFromLocal().catch(() => {});
   });
 
   shadow.querySelectorAll("[data-mode]").forEach((button) => {
@@ -155,7 +178,8 @@
   });
   if (!isEmbeddedPanel) {
     window.addEventListener("resize", () => {
-      if (isPanelOpen) applyPageSplit(true);
+      panelLayout = normalizePanelLayout(panelLayout);
+      applyPanelLayout(false);
     });
   }
   window.addEventListener("focus", () => {
@@ -192,7 +216,7 @@
     isPanelOpen = typeof force === "boolean" ? force : !isPanelOpen;
     panel.classList.toggle("is-open", isPanelOpen);
     fab.classList.toggle("is-hidden", isPanelOpen);
-    applyPageSplit(isPanelOpen);
+    applyPanelLayout(false);
     if (isPanelOpen) {
       refreshSettings({ silent: true }).catch(() => {});
       renderConversation(currentConversation);
@@ -217,9 +241,221 @@
 
   function applyPageSplit(open) {
     if (isEmbeddedPanel) return;
-    const width = getSplitPanelWidth();
+    panelLayout = normalizePanelLayout(panelLayout);
+    const width = panelLayout.dockWidth;
     document.documentElement.style.setProperty("--alc-split-width", `${width}px`);
-    document.documentElement.classList.toggle("alc-page-split-active", Boolean(open));
+    document.documentElement.classList.toggle("alc-page-split-active", Boolean(open && panelLayout.mode !== "float"));
+  }
+
+  async function loadPanelLayout() {
+    panelLayout = getDefaultPanelLayout();
+    if (isEmbeddedPanel) {
+      parent.postMessage({ type: "alc-request-layout" }, "*");
+      applyEmbeddedPanelLayout();
+      return;
+    }
+    try {
+      const stored = await readStorageArea("local", PANEL_LAYOUT_STORAGE_KEY);
+      panelLayout = normalizePanelLayout(stored?.[PANEL_LAYOUT_STORAGE_KEY]);
+    } catch {
+      panelLayout = getDefaultPanelLayout();
+    }
+    applyPanelLayout(false);
+  }
+
+  function installPanelLayoutControls() {
+    resizeEdge?.addEventListener("pointerdown", startPanelResize);
+    resizeCorner?.addEventListener("pointerdown", startPanelResize);
+    panelHeader?.addEventListener("pointerdown", startPanelDrag);
+    if (!isEmbeddedPanel) return;
+    window.addEventListener("message", (event) => {
+      if (event.source !== parent) return;
+      if (event.data?.type !== "alc-panel-layout") return;
+      embeddedLayoutMode = event.data.layout?.mode === "float" ? "float" : "dock";
+      applyEmbeddedPanelLayout();
+    });
+  }
+
+  function togglePanelLayoutMode() {
+    if (isEmbeddedPanel) {
+      parent.postMessage({ type: "alc-toggle-layout" }, "*");
+      return;
+    }
+    panelLayout = normalizePanelLayout({
+      ...panelLayout,
+      mode: panelLayout.mode === "float" ? "dock" : "float"
+    });
+    applyPanelLayout(true);
+  }
+
+  function restorePanelLayout() {
+    if (isEmbeddedPanel) {
+      parent.postMessage({ type: "alc-restore-layout" }, "*");
+      return;
+    }
+    panelLayout = getDefaultPanelLayout();
+    applyPanelLayout(true);
+  }
+
+  function applyPanelLayout(shouldSave) {
+    if (isEmbeddedPanel) {
+      applyEmbeddedPanelLayout();
+      return;
+    }
+    panelLayout = normalizePanelLayout(panelLayout);
+    const floating = panelLayout.mode === "float";
+    panel.classList.toggle("is-floating", floating);
+    panel.style.setProperty("--alc-split-width", `${panelLayout.dockWidth}px`);
+    panel.style.setProperty("--alc-float-width", `${panelLayout.floatWidth}px`);
+    panel.style.setProperty("--alc-float-height", `${panelLayout.floatHeight}px`);
+    panel.style.setProperty("--alc-float-top", `${panelLayout.floatTop}px`);
+    panel.style.setProperty("--alc-float-right", `${panelLayout.floatRight}px`);
+    applyPageSplit(isPanelOpen);
+    updateLayoutButtons(floating);
+    if (shouldSave) savePanelLayout();
+  }
+
+  function applyEmbeddedPanelLayout() {
+    const floating = embeddedLayoutMode === "float";
+    panel.classList.toggle("is-floating", floating);
+    updateLayoutButtons(floating);
+  }
+
+  function updateLayoutButtons(floating) {
+    if (layoutToggleButton) {
+      layoutToggleButton.textContent = floating ? "▣" : "⇱";
+      layoutToggleButton.dataset.i18nTitle = floating ? "dockPanel" : "floatPanel";
+      layoutToggleButton.title = t(floating ? "dockPanel" : "floatPanel");
+      layoutToggleButton.setAttribute("aria-pressed", floating ? "true" : "false");
+    }
+    if (restoreLayoutButton) {
+      restoreLayoutButton.title = t("restorePanel");
+    }
+  }
+
+  function savePanelLayout() {
+    if (isEmbeddedPanel) return;
+    clearTimeout(panelLayoutSaveTimer);
+    panelLayoutSaveTimer = setTimeout(() => {
+      try {
+        chrome.storage?.local?.set({ [PANEL_LAYOUT_STORAGE_KEY]: panelLayout });
+      } catch {
+        // Layout persistence is best-effort; the panel still works for the current page.
+      }
+    }, 120);
+  }
+
+  function startPanelResize(event) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    if (isEmbeddedPanel) {
+      const kind = panel.classList.contains("is-floating") || event.currentTarget?.classList.contains("alc-resize-corner")
+        ? "corner"
+        : "edge";
+      postEmbeddedPointerGesture(event, "alc-resize", { kind });
+      return;
+    }
+    const floating = panelLayout.mode === "float" || event.currentTarget?.classList.contains("alc-resize-corner");
+    const start = {
+      x: event.clientX,
+      y: event.clientY,
+      layout: { ...panelLayout },
+      floating
+    };
+    panel.classList.add("is-resizing");
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    const onMove = (moveEvent) => {
+      if (floating) {
+        panelLayout = normalizePanelLayout({
+          ...start.layout,
+          mode: "float",
+          floatWidth: start.layout.floatWidth + (start.x - moveEvent.clientX),
+          floatHeight: start.layout.floatHeight + (moveEvent.clientY - start.y)
+        });
+      } else {
+        panelLayout = normalizePanelLayout({
+          ...start.layout,
+          dockWidth: start.layout.dockWidth + (start.x - moveEvent.clientX)
+        });
+      }
+      applyPanelLayout(false);
+    };
+    const onUp = () => {
+      panel.classList.remove("is-resizing");
+      document.removeEventListener("pointermove", onMove, true);
+      document.removeEventListener("pointerup", onUp, true);
+      document.removeEventListener("pointercancel", onUp, true);
+      savePanelLayout();
+    };
+    document.addEventListener("pointermove", onMove, true);
+    document.addEventListener("pointerup", onUp, true);
+    document.addEventListener("pointercancel", onUp, true);
+  }
+
+  function startPanelDrag(event) {
+    if (event.button !== 0) return;
+    if (event.target?.closest?.("button, select, textarea, input, a")) return;
+    if (!panel.classList.contains("is-floating")) return;
+    event.preventDefault();
+    if (isEmbeddedPanel) {
+      postEmbeddedPointerGesture(event, "alc-drag");
+      return;
+    }
+    const start = {
+      x: event.clientX,
+      y: event.clientY,
+      layout: { ...panelLayout }
+    };
+    panel.classList.add("is-dragging");
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    const onMove = (moveEvent) => {
+      panelLayout = normalizePanelLayout({
+        ...start.layout,
+        floatTop: start.layout.floatTop + (moveEvent.clientY - start.y),
+        floatRight: start.layout.floatRight - (moveEvent.clientX - start.x)
+      });
+      applyPanelLayout(false);
+    };
+    const onUp = () => {
+      panel.classList.remove("is-dragging");
+      document.removeEventListener("pointermove", onMove, true);
+      document.removeEventListener("pointerup", onUp, true);
+      document.removeEventListener("pointercancel", onUp, true);
+      savePanelLayout();
+    };
+    document.addEventListener("pointermove", onMove, true);
+    document.addEventListener("pointerup", onUp, true);
+    document.addEventListener("pointercancel", onUp, true);
+  }
+
+  function postEmbeddedPointerGesture(event, action, extra = {}) {
+    const pointerId = event.pointerId;
+    const post = (type, pointerEvent) => {
+      parent.postMessage({
+        type,
+        pointerId,
+        screenX: pointerEvent.screenX,
+        screenY: pointerEvent.screenY,
+        ...extra
+      }, "*");
+    };
+    const onMove = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      moveEvent.preventDefault();
+      post(`${action}-move`, moveEvent);
+    };
+    const onUp = (upEvent) => {
+      if (upEvent.pointerId !== pointerId) return;
+      post(`${action}-end`, upEvent);
+      document.removeEventListener("pointermove", onMove, true);
+      document.removeEventListener("pointerup", onUp, true);
+      document.removeEventListener("pointercancel", onUp, true);
+    };
+    event.currentTarget?.setPointerCapture?.(pointerId);
+    post(`${action}-start`, event);
+    document.addEventListener("pointermove", onMove, true);
+    document.addEventListener("pointerup", onUp, true);
+    document.addEventListener("pointercancel", onUp, true);
   }
 
   function installPageSplitStyles() {
@@ -254,6 +490,12 @@
       }
     `;
     document.documentElement.appendChild(node);
+  }
+
+  function removeExistingArxivMateRoots() {
+    document.getElementById("arxiv-llm-companion-root")?.remove();
+    document.getElementById("arxiv-llm-companion-frame-root")?.remove();
+    document.documentElement.classList.remove("alc-page-split-active");
   }
 
   function renderPaperHeader() {
@@ -415,7 +657,7 @@
     }
 
     currentMode = mode;
-    const contextMode = useFullTextNext || mode === "deep" || mode === "study" ? "full" : "auto";
+    const contextMode = resolveTurnContextMode(mode);
     setBusy(true);
     setStatus(contextMode === "full" ? t("preparingFull") : t("preparingFast"));
     const preview = appendPreviewTurn(userText);
@@ -425,9 +667,15 @@
     }
 
     try {
+      const paperPayload = await buildPaperPayloadForTurn(contextMode);
+      if (paperPayload.fullText) {
+        setStatus(`${t("preparingFull")} · ${t("pdfTextReady", { chars: formatTokenCount(paperPayload.fullText.length) })}`);
+      } else if (paperPayload.contextSource) {
+        setStatus(`${t("preparingFull")} · ${paperPayload.contextSource}`);
+      }
       const response = await sendStreamMessage({
         type: "summarizePaper",
-        paper,
+        paper: paperPayload,
         mode,
         question: userText,
         contextMode,
@@ -459,10 +707,7 @@
         setStatus(error.message || String(error), true);
       }
     } finally {
-      if (contextMode === "full") {
-        useFullTextNext = false;
-        fullTextToggle.checked = false;
-      }
+      fullTextToggle.checked = true;
       setBusy(false);
       autoResizeInput();
     }
@@ -475,8 +720,9 @@
   }
 
   async function loadInitialState() {
+    await loadPanelLayout();
     const loaded = await refreshSettings({ silent: true });
-    if (!loaded) {
+    if (!loaded && !lastKnownModelProfiles.length) {
       currentSettings = null;
       selectedProfileId = "";
       selectedModelLabel = "";
@@ -484,25 +730,113 @@
       applyAppearance("system");
       renderModelSelect();
       renderUpdateBanner();
+    } else if (!loaded) {
+      renderModelSelect();
+      renderUpdateBanner();
     }
     await loadConversation();
+  }
+
+  function resolveTurnContextMode(mode) {
+    if (["quick", "deep", "study", "ask"].includes(mode)) return "full";
+    return "auto";
+  }
+
+  async function buildPaperPayloadForTurn(contextMode) {
+    const payload = { ...paper };
+    if (contextMode !== "full" || payload.fullText) return payload;
+    const maxChars = Number(getSelectedProfile()?.maxContextChars || currentSettings?.maxContextChars || 14000);
+    try {
+      const text = await extractPdfTextInPage(payload.pdfUrl || payload.pageUrl || location.href, maxChars);
+      if (text && text.length > 400) {
+        payload.fullText = text;
+        payload.contextSource = "浏览器页面 PDF.js 正文抽取 + 页面元数据";
+      }
+    } catch (error) {
+      payload.contextSource = `浏览器页面 PDF 抽取失败：${error.message || String(error)}`;
+    }
+    return payload;
+  }
+
+  async function extractPdfTextInPage(pdfUrl, maxChars) {
+    const pdfjs = window.pdfjsLib;
+    if (!pdfjs?.getDocument) {
+      throw new Error("前端 PDF.js 未加载，请重新加载扩展。");
+    }
+    if (pdfjs.GlobalWorkerOptions) {
+      pdfjs.GlobalWorkerOptions.workerSrc = runtimeUrl("vendor/pdfjs/pdf.worker.js");
+    }
+    const url = clean(pdfUrl || location.href);
+    if (!url) throw new Error("没有可读取的 PDF URL。");
+    const charLimit = Math.max(4000, Number(maxChars) || 14000);
+    const task = pdfjs.getDocument({
+      url,
+      httpHeaders: {
+        Accept: "application/pdf,*/*;q=0.8"
+      },
+      withCredentials: true,
+      rangeChunkSize: 262144,
+      disableAutoFetch: true,
+      disableStream: false,
+      disableFontFace: true,
+      disableWorker: true,
+      useSystemFonts: true
+    });
+    const pdfDoc = await task.promise;
+    const parts = [];
+    const pageLimit = Math.min(pdfDoc.numPages, 80);
+    for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
+      const page = await pdfDoc.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item) => typeof item.str === "string" ? item.str : "")
+        .filter(Boolean)
+        .join(" ");
+      if (pageText.trim()) {
+        parts.push(`Page ${pageNumber}\n${pageText}`);
+      }
+      if (parts.join("\n\n").length >= charLimit) break;
+    }
+    try {
+      await pdfDoc.destroy();
+    } catch {}
+    return normalizeTextBlock(parts.join("\n\n")).slice(0, charLimit);
   }
 
   function installSettingsChangeListener() {
     try {
       chrome.storage?.onChanged?.addListener((changes, areaName) => {
-        if (areaName !== "sync" || !changes.settings) return;
-        refreshSettings({ silent: true }).catch(() => {
-          currentSettings = changes.settings.newValue || currentSettings;
-          reconcileSelectedProfile();
-          selectedModelLabel = buildSelectedModelLabel();
-          renderModelSelect();
-          renderUpdateBanner();
-        });
+        handleStorageSettingsChange(changes, areaName);
       });
     } catch {
       // Storage listeners are optional; initial settings still cover normal page loads.
     }
+    try {
+      chrome.runtime?.onMessage?.addListener((message) => {
+        if (message?.type !== "settingsChanged") return false;
+        applySettingsSnapshot(message.settings, {
+          allowEmptyProfiles: Array.isArray(message.settings?.modelProfiles)
+        });
+        showModelLoadStatus({ onlyWhenEmpty: false });
+        return false;
+      });
+    } catch {
+      // Runtime notifications are best-effort; focus/open refresh still covers normal use.
+    }
+  }
+
+  function handleStorageSettingsChange(changes, areaName) {
+    if (areaName !== "local" || (!changes.settings && !changes.modelProfiles)) return;
+    const snapshot = buildSettingsSnapshotFromStorageChanges(changes);
+    const allowEmptyProfiles = Boolean(changes.modelProfiles);
+    if (getSettingsProfiles(snapshot).length) {
+      applySettingsSnapshot(snapshot, { allowEmptyProfiles });
+      showModelLoadStatus({ onlyWhenEmpty: false });
+      return;
+    }
+    refreshSettings({ silent: true }).catch(() => {
+      if (snapshot) applySettingsSnapshot(snapshot, { allowEmptyProfiles });
+    });
   }
 
   function applyAppearance(value) {
@@ -568,13 +902,7 @@
     settingsRefreshPromise = readLatestSettings()
       .then((settings) => {
         if (!settings) throw new Error("No settings snapshot.");
-        currentSettings = settings;
-        reconcileSelectedProfile();
-        selectedModelLabel = buildSelectedModelLabel();
-        applyLanguage(settings.language);
-        applyAppearance(settings.appearance);
-        renderModelSelect();
-        renderUpdateBanner();
+        applySettingsSnapshot(settings);
         showModelLoadStatus({ onlyWhenEmpty: false });
         return true;
       })
@@ -588,55 +916,97 @@
     return settingsRefreshPromise;
   }
 
+  async function forceRefreshSettingsFromLocal() {
+    const localSettings = await readLocalSettings();
+    if (getSettingsProfiles(localSettings).length) {
+      applySettingsSnapshot(localSettings);
+      showModelLoadStatus({ onlyWhenEmpty: false });
+      return true;
+    }
+    return refreshSettings({ silent: true });
+  }
+
+  function applySettingsSnapshot(settings, options = {}) {
+    currentSettings = mergeSettingsWithKnownProfiles(settings, options);
+    reconcileSelectedProfile();
+    selectedModelLabel = buildSelectedModelLabel();
+    applyLanguage(currentSettings.language);
+    applyAppearance(currentSettings.appearance);
+    renderModelSelect();
+    renderUpdateBanner();
+  }
+
   async function readLatestSettings() {
-    const [runtimeResult, syncResult, mirrorResult] = await Promise.allSettled([
-      sendMessage({ type: "getSettings" }),
-      readStoredSettings("sync", "settings"),
-      readStoredSettings("local", "settingsMirror")
+    const [storedResult, runtimeResult] = await Promise.allSettled([
+      readStoredSettingsSnapshot(),
+      sendMessage({ type: "getSettings" })
     ]);
+    const storedSettings = storedResult.status === "fulfilled" ? storedResult.value : null;
+    if (getSettingsProfiles(storedSettings).length) return storedSettings;
     const runtimeSettings = runtimeResult.status === "fulfilled" ? runtimeResult.value : null;
-    const syncSettings = syncResult.status === "fulfilled" ? syncResult.value : null;
-    const mirrorSettings = mirrorResult.status === "fulfilled" ? mirrorResult.value : null;
-    const runtimeProfiles = getSettingsProfiles(runtimeSettings);
-    const syncProfiles = getSettingsProfiles(syncSettings);
-    const mirrorProfiles = getSettingsProfiles(mirrorSettings);
-    settingsSourceStats = {
-      runtime: runtimeProfiles.length,
-      sync: syncProfiles.length,
-      mirror: mirrorProfiles.length,
-      selected: runtimeProfiles.length ? "runtime" : syncProfiles.length ? "sync" : mirrorProfiles.length ? "mirror" : "none"
-    };
-    if (runtimeProfiles.length) return runtimeSettings;
-    if (syncProfiles.length) return mergeSettingsSnapshot(runtimeSettings, syncSettings, syncProfiles);
-    if (mirrorProfiles.length) return mergeSettingsSnapshot(runtimeSettings || syncSettings, mirrorSettings, mirrorProfiles);
-    return runtimeSettings || syncSettings || mirrorSettings || null;
+    if (getSettingsProfiles(runtimeSettings).length) return runtimeSettings;
+    return storedSettings || runtimeSettings;
   }
 
-  function mergeSettingsSnapshot(base, source, profiles) {
-    return {
-      ...(base || {}),
-      ...(source || {}),
-      language: base?.language || source?.language || "system",
-      appearance: base?.appearance || source?.appearance || "system",
-      modelProfiles: profiles
-    };
+  function readLocalSettings() {
+    return readStoredSettingsSnapshot();
   }
 
-  function readStoredSettings(area, key) {
+  async function readStoredSettingsSnapshot() {
+    const [localItems, syncItems] = await Promise.all([
+      readStorageArea("local", ["settings", "settingsMirror", "modelProfiles"]),
+      readStorageArea("sync", "settings")
+    ]);
+    return mergeStoredSettingsCandidates(
+      localItems?.settings,
+      createProfilesSnapshotSettings(localItems?.modelProfiles, localItems?.settings),
+      localItems?.settingsMirror,
+      syncItems?.settings
+    );
+  }
+
+  function readStorageArea(area, keys) {
     return new Promise((resolve) => {
       try {
-        const storageArea = area === "local" ? chrome.storage?.local : chrome.storage?.sync;
-        storageArea?.get(key, (items) => {
+        const storageArea = area === "sync" ? chrome.storage?.sync : chrome.storage?.local;
+        if (!storageArea) {
+          resolve(null);
+          return;
+        }
+        storageArea.get(keys, (items) => {
           if (chrome.runtime?.lastError) {
             resolve(null);
             return;
           }
-          resolve(items?.[key] || null);
+          resolve(items || null);
         });
       } catch {
         resolve(null);
       }
     });
+  }
+
+  function mergeStoredSettingsCandidates(...candidates) {
+    const snapshots = candidates.filter((candidate) => candidate && typeof candidate === "object");
+    const primary = snapshots[0] || null;
+    const profileSource = snapshots.find((candidate) => getSettingsProfiles(candidate).length);
+    if (!profileSource) return primary;
+    return {
+      ...(primary || {}),
+      ...profileSource,
+      language: primary?.language || profileSource.language || "system",
+      appearance: primary?.appearance || profileSource.appearance || "system",
+      modelProfiles: getSettingsProfiles(profileSource)
+    };
+  }
+
+  function createProfilesSnapshotSettings(modelProfiles, base = {}) {
+    return Array.isArray(modelProfiles) && modelProfiles.length
+      ? {
+        ...(base || {}),
+        modelProfiles
+      }
+      : null;
   }
 
   function getSettingsProfiles(settings) {
@@ -645,32 +1015,78 @@
       : [];
   }
 
+  function mergeSettingsWithKnownProfiles(settings, { allowEmptyProfiles = false } = {}) {
+    const next = settings && typeof settings === "object" ? { ...settings } : {};
+    const profiles = getSettingsProfiles(next);
+    if (profiles.length) {
+      lastKnownModelProfiles = profiles;
+      next.modelProfiles = profiles;
+      return next;
+    }
+    if (allowEmptyProfiles && Array.isArray(next.modelProfiles)) {
+      lastKnownModelProfiles = [];
+      next.modelProfiles = [];
+      return next;
+    }
+    if (lastKnownModelProfiles.length) {
+      next.modelProfiles = lastKnownModelProfiles;
+    }
+    return next;
+  }
+
+  function buildSettingsSnapshotFromStorageChanges(changes) {
+    const settings = changes.settings?.newValue && typeof changes.settings.newValue === "object"
+      ? changes.settings.newValue
+      : currentSettings;
+    const changedProfiles = Array.isArray(changes.modelProfiles?.newValue)
+      ? changes.modelProfiles.newValue
+      : [];
+    if (changedProfiles.length) {
+      return {
+        ...(settings || {}),
+        modelProfiles: changedProfiles
+      };
+    }
+    return settings || null;
+  }
+
   function renderModelSelect() {
     if (!modelSelect) return;
-    const profiles = Array.isArray(currentSettings?.modelProfiles) ? currentSettings.modelProfiles : [];
+    const profiles = getRenderableProfiles();
     reconcileSelectedProfile();
-    modelSelect.innerHTML = profiles.length
-      ? profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === selectedProfileId ? "selected" : ""}>${escapeHtml(formatProfileOption(profile))}</option>`).join("")
-      : `<option value="">${escapeHtml(t("noModelProfilesShort"))}</option>`;
+    modelSelect.replaceChildren(...createModelOptions(profiles));
     modelSelect.disabled = isGenerating || profiles.length === 0;
     selectedModelLabel = buildSelectedModelLabel();
   }
 
+  function createModelOptions(profiles) {
+    if (!profiles.length) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = t("noModelProfilesShort");
+      return [option];
+    }
+    return profiles.map((profile) => {
+      const option = document.createElement("option");
+      option.value = profile.id || "";
+      option.selected = profile.id === selectedProfileId;
+      option.textContent = formatProfileOption(profile);
+      return option;
+    });
+  }
+
   function showModelLoadStatus({ onlyWhenEmpty = true } = {}) {
-    const profiles = getSettingsProfiles(currentSettings);
+    const profiles = getRenderableProfiles();
     if (profiles.length) {
       if (!onlyWhenEmpty) {
         setStatus(t("modelProfilesLoaded", {
-          count: profiles.length,
-          source: settingsSourceStats.selected
+          count: profiles.length
         }));
       }
       return;
     }
     setStatus(t("modelProfilesMissing", {
-      runtime: settingsSourceStats.runtime,
-      sync: settingsSourceStats.sync,
-      mirror: settingsSourceStats.mirror
+      count: profiles.length
     }), true);
   }
 
@@ -684,7 +1100,7 @@
   }
 
   function reconcileSelectedProfile() {
-    const profiles = Array.isArray(currentSettings?.modelProfiles) ? currentSettings.modelProfiles : [];
+    const profiles = getRenderableProfiles();
     if (!profiles.length) {
       selectedProfileId = "";
       return;
@@ -695,8 +1111,13 @@
   }
 
   function getSelectedProfile() {
-    const profiles = Array.isArray(currentSettings?.modelProfiles) ? currentSettings.modelProfiles : [];
+    const profiles = getRenderableProfiles();
     return profiles.find((profile) => profile.id === selectedProfileId) || null;
+  }
+
+  function getRenderableProfiles() {
+    const profiles = getSettingsProfiles(currentSettings);
+    return profiles.length ? profiles : lastKnownModelProfiles;
   }
 
   function buildSelectedModelLabel() {
@@ -850,6 +1271,12 @@
     isGenerating = Boolean(isBusy);
     shadow.querySelectorAll("button, textarea, input, select").forEach((node) => {
       if (node.classList.contains("alc-close") || node.classList.contains("alc-fab")) return;
+      if (node.classList.contains("alc-layout-toggle") || node.classList.contains("alc-restore-layout")) return;
+      if (node.classList.contains("alc-fulltext")) {
+        node.disabled = true;
+        node.checked = true;
+        return;
+      }
       if (node.classList.contains("alc-review") || node.classList.contains("alc-copy")) return;
       if (node.classList.contains("alc-send")) {
         node.disabled = false;
@@ -1031,19 +1458,21 @@
   }
 
   function isPdfPage() {
-    return /arxiv\.org\/pdf\//i.test(location.href) ||
-      /\.pdf(?:[?#]|$)/i.test(location.href) ||
-      Boolean(document.querySelector("embed[type='application/pdf'], pdf-viewer"));
+    return isPdfLikeUrl(location.href) || Boolean(document.querySelector("embed[type='application/pdf'], pdf-viewer"));
+  }
+
+  function isSupportedReadingPage(value) {
+    return Boolean(value?.id || isPdfPage());
   }
 
   function installIframePanel(paperData) {
     if (!isRuntimeAvailable()) return;
-    const existing = document.getElementById("arxiv-llm-companion-frame-root");
-    if (existing) existing.remove();
+    removeExistingArxivMateRoots();
     installStandaloneSplitStyles();
 
     const root = document.createElement("div");
     root.id = "arxiv-llm-companion-frame-root";
+    root.dataset.extensionId = chrome.runtime.id || "";
     const shadowRoot = root.attachShadow({ mode: "open" });
     document.documentElement.appendChild(root);
 
@@ -1081,6 +1510,18 @@
         background: var(--alc-frame-panel);
         box-shadow: var(--alc-frame-shadow);
       }
+      .alc-frame.is-floating {
+        top: var(--alc-float-top, 72px);
+        right: var(--alc-float-right, 24px);
+        bottom: auto;
+        width: var(--alc-float-width, 560px);
+        height: var(--alc-float-height, 720px);
+        max-width: calc(100vw - 24px);
+        max-height: calc(100vh - 24px);
+        border: 1px solid var(--alc-frame-line);
+        border-radius: 8px;
+        box-shadow: 0 16px 42px rgba(31, 35, 40, 0.22);
+      }
       :host([data-appearance="dark"]) .alc-frame {
         --alc-frame-panel: #161a1f;
         --alc-frame-line: #303942;
@@ -1100,6 +1541,48 @@
         border: 0;
         display: block;
         background: transparent;
+      }
+      .alc-frame-resize-edge,
+      .alc-frame-resize-corner {
+        position: absolute;
+        z-index: 3;
+        display: none;
+        pointer-events: auto;
+        touch-action: none;
+      }
+      .alc-frame.is-open .alc-frame-resize-edge,
+      .alc-frame.is-open.is-floating .alc-frame-resize-corner {
+        display: block;
+      }
+      .alc-frame-resize-edge {
+        top: 0;
+        bottom: 0;
+        left: -5px;
+        width: 10px;
+        cursor: ew-resize;
+      }
+      .alc-frame-resize-corner {
+        left: -7px;
+        bottom: -7px;
+        width: 18px;
+        height: 18px;
+        cursor: nesw-resize;
+      }
+      .alc-frame-resize-corner::after {
+        content: "";
+        position: absolute;
+        left: 5px;
+        bottom: 5px;
+        width: 7px;
+        height: 7px;
+        border-left: 2px solid #66707a;
+        border-bottom: 2px solid #66707a;
+        opacity: 0.72;
+      }
+      .alc-frame.is-resizing,
+      .alc-frame.is-dragging {
+        transition: none;
+        user-select: none;
       }
       .alc-frame-fab.is-hidden {
         display: none;
@@ -1125,15 +1608,33 @@
     frame.allow = "clipboard-read; clipboard-write";
     frame.src = `${runtimeUrl("panel.html")}?paper=${encodeURIComponent(JSON.stringify(paperData))}`;
     frameShell.appendChild(frame);
+    const frameResizeEdge = document.createElement("div");
+    frameResizeEdge.className = "alc-frame-resize-edge";
+    const frameResizeCorner = document.createElement("div");
+    frameResizeCorner.className = "alc-frame-resize-corner";
+    frameShell.append(frameResizeEdge, frameResizeCorner);
 
     shadowRoot.append(styleNode, fabButton, frameShell);
+    let frameLayout = getDefaultPanelLayout();
+    let activeFrameGesture = null;
+
+    const loadFrameLayout = async () => {
+      try {
+        const stored = await readStorageArea("local", PANEL_LAYOUT_STORAGE_KEY);
+        frameLayout = normalizePanelLayout(stored?.[PANEL_LAYOUT_STORAGE_KEY]);
+      } catch {
+        frameLayout = getDefaultPanelLayout();
+      }
+      applyFrameLayout(false);
+    };
+    loadFrameLayout();
 
     const applyFrameAppearance = (value) => {
       root.dataset.appearance = resolveFrameAppearance(value);
     };
     const loadFrameAppearance = async () => {
       try {
-        const { settings = {} } = await chrome.storage.sync.get("settings");
+        const settings = await sendMessage({ type: "getSettings" });
         applyFrameAppearance(settings.appearance);
       } catch {
         applyFrameAppearance("system");
@@ -1143,7 +1644,7 @@
     loadFrameAppearance();
     try {
       chrome.storage?.onChanged?.addListener((changes, areaName) => {
-        if (areaName !== "sync" || !changes.settings) return;
+        if (areaName !== "local" || !changes.settings) return;
         applyFrameAppearance(changes.settings.newValue?.appearance);
       });
     } catch {
@@ -1151,10 +1652,10 @@
     }
 
     const openPanel = () => {
-      document.documentElement.style.setProperty("--alc-split-width", `${getSplitPanelWidth()}px`);
-      document.documentElement.classList.add("alc-page-split-active");
+      frameLayout = normalizePanelLayout(frameLayout);
       frameShell.classList.add("is-open");
       fabButton.classList.add("is-hidden");
+      applyFrameLayout(false);
       frame.focus();
       frame.contentWindow?.focus();
     };
@@ -1165,14 +1666,167 @@
     };
 
     fabButton.addEventListener("click", openPanel);
+    frameResizeEdge.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      startFramePointerGesture(event, "resize", {
+        kind: "edge",
+        startX: event.screenX,
+        startY: event.screenY
+      });
+    });
+    frameResizeCorner.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      startFramePointerGesture(event, "resize", {
+        kind: "corner",
+        startX: event.screenX,
+        startY: event.screenY
+      });
+    });
     window.addEventListener("resize", () => {
       if (!frameShell.classList.contains("is-open")) return;
-      document.documentElement.style.setProperty("--alc-split-width", `${getSplitPanelWidth()}px`);
+      frameLayout = normalizePanelLayout(frameLayout);
+      applyFrameLayout(false);
     });
     window.addEventListener("message", (event) => {
       if (event.source !== frame.contentWindow) return;
       if (event.data?.type === "alc-close-panel") closePanel();
+      if (event.data?.type === "alc-request-layout") postFrameLayout();
+      if (event.data?.type === "alc-toggle-layout") {
+        frameLayout = normalizePanelLayout({
+          ...frameLayout,
+          mode: frameLayout.mode === "float" ? "dock" : "float"
+        });
+        applyFrameLayout(true);
+      }
+      if (event.data?.type === "alc-restore-layout") {
+        frameLayout = getDefaultPanelLayout();
+        applyFrameLayout(true);
+      }
+      if (event.data?.type === "alc-resize-start") {
+        startFrameGesture("resize", {
+          kind: event.data.kind === "corner" ? "corner" : "edge",
+          startX: event.data.screenX,
+          startY: event.data.screenY
+        });
+      }
+      if (event.data?.type === "alc-drag-start") {
+        startFrameGesture("drag", {
+          startX: event.data.screenX,
+          startY: event.data.screenY
+        });
+      }
+      if (event.data?.type === "alc-resize-move" || event.data?.type === "alc-drag-move") {
+        updateFrameGesture(event.data.screenX, event.data.screenY);
+      }
+      if (event.data?.type === "alc-resize-end" || event.data?.type === "alc-drag-end") {
+        endFrameGesture(event.data.screenX, event.data.screenY);
+      }
     });
+
+    function applyFrameLayout(shouldSave) {
+      frameLayout = normalizePanelLayout(frameLayout);
+      const floating = frameLayout.mode === "float";
+      document.documentElement.style.setProperty("--alc-split-width", `${frameLayout.dockWidth}px`);
+      document.documentElement.classList.toggle("alc-page-split-active", frameShell.classList.contains("is-open") && !floating);
+      frameShell.classList.toggle("is-floating", floating);
+      frameShell.style.setProperty("--alc-split-width", `${frameLayout.dockWidth}px`);
+      frameShell.style.setProperty("--alc-float-width", `${frameLayout.floatWidth}px`);
+      frameShell.style.setProperty("--alc-float-height", `${frameLayout.floatHeight}px`);
+      frameShell.style.setProperty("--alc-float-top", `${frameLayout.floatTop}px`);
+      frameShell.style.setProperty("--alc-float-right", `${frameLayout.floatRight}px`);
+      postFrameLayout();
+      if (shouldSave) {
+        try {
+          chrome.storage?.local?.set({ [PANEL_LAYOUT_STORAGE_KEY]: frameLayout });
+        } catch {
+          // Layout persistence is best-effort.
+        }
+      }
+    }
+
+    function postFrameLayout() {
+      try {
+        frame.contentWindow?.postMessage({
+          type: "alc-panel-layout",
+          layout: {
+            mode: frameLayout.mode
+          }
+        }, "*");
+      } catch {
+        // The iframe may still be loading.
+      }
+    }
+
+    function startFrameGesture(kind, data) {
+      frameLayout = normalizePanelLayout(frameLayout);
+      activeFrameGesture = {
+        kind,
+        resizeKind: data.kind || "edge",
+        startX: Number(data.startX) || 0,
+        startY: Number(data.startY) || 0,
+        layout: { ...frameLayout }
+      };
+      frameShell.classList.toggle("is-resizing", kind === "resize");
+      frameShell.classList.toggle("is-dragging", kind === "drag");
+    }
+
+    function startFramePointerGesture(event, kind, data) {
+      startFrameGesture(kind, data);
+      const pointerId = event.pointerId;
+      event.currentTarget?.setPointerCapture?.(pointerId);
+      const onMove = (moveEvent) => {
+        if (moveEvent.pointerId !== pointerId) return;
+        updateFrameGesture(moveEvent.screenX, moveEvent.screenY);
+      };
+      const onUp = (upEvent) => {
+        if (upEvent.pointerId === pointerId) {
+          endFrameGesture(upEvent.screenX, upEvent.screenY);
+        }
+        document.removeEventListener("pointermove", onMove, true);
+        document.removeEventListener("pointerup", onUp, true);
+        document.removeEventListener("pointercancel", onUp, true);
+      };
+      document.addEventListener("pointermove", onMove, true);
+      document.addEventListener("pointerup", onUp, true);
+      document.addEventListener("pointercancel", onUp, true);
+    }
+
+    function updateFrameGesture(screenX, screenY) {
+      if (!activeFrameGesture) return;
+      const x = Number(screenX) || activeFrameGesture.startX;
+      const y = Number(screenY) || activeFrameGesture.startY;
+      const dx = x - activeFrameGesture.startX;
+      const dy = y - activeFrameGesture.startY;
+      const base = activeFrameGesture.layout;
+      if (activeFrameGesture.kind === "drag") {
+        frameLayout = normalizePanelLayout({
+          ...base,
+          mode: "float",
+          floatTop: base.floatTop + dy,
+          floatRight: base.floatRight - dx
+        });
+      } else if (activeFrameGesture.resizeKind === "corner" || base.mode === "float") {
+        frameLayout = normalizePanelLayout({
+          ...base,
+          mode: "float",
+          floatWidth: base.floatWidth - dx,
+          floatHeight: base.floatHeight + dy
+        });
+      } else {
+        frameLayout = normalizePanelLayout({
+          ...base,
+          dockWidth: base.dockWidth - dx
+        });
+      }
+      applyFrameLayout(false);
+    }
+
+    function endFrameGesture(screenX, screenY) {
+      if (activeFrameGesture) updateFrameGesture(screenX, screenY);
+      activeFrameGesture = null;
+      frameShell.classList.remove("is-resizing", "is-dragging");
+      applyFrameLayout(true);
+    }
   }
 })();
 
@@ -1213,6 +1867,47 @@ function installStandaloneSplitStyles() {
 function getSplitPanelWidth() {
   const width = Math.round(Math.min(500, Math.max(420, window.innerWidth * 0.34)));
   return window.innerWidth <= 900 ? Math.min(window.innerWidth, 460) : width;
+}
+
+function getDefaultPanelLayout() {
+  return normalizePanelLayout({
+    mode: "dock",
+    dockWidth: getSplitPanelWidth(),
+    floatWidth: Math.round(Math.min(680, Math.max(520, window.innerWidth * 0.42))),
+    floatHeight: Math.round(Math.min(760, Math.max(520, window.innerHeight * 0.78))),
+    floatTop: 64,
+    floatRight: 24
+  });
+}
+
+function normalizePanelLayout(value = {}) {
+  const viewportWidth = Math.max(320, window.innerWidth || 1280);
+  const viewportHeight = Math.max(320, window.innerHeight || 900);
+  const maxDockWidth = Math.max(360, Math.min(860, viewportWidth - 260));
+  const dockWidth = clampNumber(value.dockWidth, 360, maxDockWidth, getSplitPanelWidth());
+  const maxFloatWidth = Math.max(360, viewportWidth - 24);
+  const maxFloatHeight = Math.max(360, viewportHeight - 24);
+  const floatWidth = clampNumber(value.floatWidth, 420, maxFloatWidth, Math.min(620, maxFloatWidth));
+  const floatHeight = clampNumber(value.floatHeight, 420, maxFloatHeight, Math.min(720, maxFloatHeight));
+  const floatRight = clampNumber(value.floatRight, 8, Math.max(8, viewportWidth - floatWidth - 8), 24);
+  const floatTop = clampNumber(value.floatTop, 8, Math.max(8, viewportHeight - floatHeight - 8), 64);
+  return {
+    mode: value.mode === "float" ? "float" : "dock",
+    dockWidth,
+    floatWidth,
+    floatHeight,
+    floatTop,
+    floatRight
+  };
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  const safeFallback = Number.isFinite(Number(fallback)) ? Number(fallback) : min;
+  const normalized = Number.isFinite(number) ? number : safeFallback;
+  const lower = Math.min(min, max);
+  const upper = Math.max(min, max);
+  return Math.round(Math.min(upper, Math.max(lower, normalized)));
 }
 
 function normalizeAppearance(value) {
@@ -1311,10 +2006,12 @@ function findLastAssistantText(conversation) {
 }
 
 function extractPaper() {
-  const id = extractArxivId(location.href);
+  const arxivId = extractArxivId(location.href);
+  const isPdf = isCurrentPdfPage();
   const title = getField(".title.mathjax", "Title:") ||
     document.querySelector("meta[name='citation_title']")?.content ||
     extractPdfTitle() ||
+    extractTitleFromPdfUrl(location.href) ||
     document.title.replace(/\s*\|\s*arXiv.*$/i, "");
   const authors = getAuthors();
   const abstract = getField("blockquote.abstract", "Abstract:");
@@ -1326,10 +2023,12 @@ function extractPaper() {
   const paperUpdatedAt = extractUpdatedDate(document);
   const pdfUrl = document.querySelector("meta[name='citation_pdf_url']")?.content ||
     document.querySelector("a[title='Download PDF']")?.href ||
-    extractPdfUrl(location.href, id);
+    extractPdfUrl(location.href, arxivId);
+  const id = arxivId || (isPdf ? createPdfDocumentId(pdfUrl || location.href) : "");
 
   return {
     id,
+    sourceType: arxivId ? "arxiv" : isPdf ? "pdf" : "web",
     title: clean(title),
     authors: clean(authors),
     abstract: clean(abstract),
@@ -1337,7 +2036,8 @@ function extractPaper() {
     comments: clean(comments),
     submittedAt: clean(submittedAt),
     paperUpdatedAt: clean(paperUpdatedAt),
-    pdfUrl: clean(pdfUrl)
+    pdfUrl: clean(pdfUrl || (isPdf ? location.href : "")),
+    pageUrl: clean(location.href)
   };
 }
 
@@ -1399,6 +2099,69 @@ function extractPdfTitle() {
     document.querySelector("embed[type='application/pdf']")?.getAttribute("title") ||
     "";
   return String(title).replace(/\.pdf$/i, "").replace(/_/g, " ").trim();
+}
+
+function extractTitleFromPdfUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const lastPart = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "");
+    const fileName = lastPart.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim();
+    return fileName || parsed.hostname;
+  } catch {
+    return String(url || "")
+      .split(/[\\/]/)
+      .pop()
+      ?.replace(/\.pdf(?:[?#].*)?$/i, "")
+      .replace(/[_-]+/g, " ")
+      .trim() || "";
+  }
+}
+
+function isCurrentPdfPage() {
+  return isPdfLikeUrl(location.href) || Boolean(document.querySelector("embed[type='application/pdf'], pdf-viewer"));
+}
+
+function isPdfLikeUrl(url) {
+  return /arxiv\.org\/pdf\//i.test(String(url || "")) || /\.pdf(?:[?#]|$)/i.test(String(url || ""));
+}
+
+function createPdfDocumentId(url) {
+  const normalized = normalizeDocumentUrl(url || location.href);
+  return normalized ? `pdf:${hashString(normalized)}` : "";
+}
+
+function normalizeDocumentUrl(url) {
+  try {
+    const parsed = new URL(url, location.href);
+    parsed.hash = "";
+    return parsed.href;
+  } catch {
+    return String(url || "").replace(/#.*$/, "");
+  }
+}
+
+function ensureDocumentIdentity(value) {
+  if (value?.id) return value;
+  if (!isCurrentPdfPage()) return value;
+  const pdfUrl = clean(value?.pdfUrl) || location.href;
+  return {
+    ...value,
+    id: createPdfDocumentId(pdfUrl),
+    sourceType: value?.sourceType || "pdf",
+    title: clean(value?.title) || extractPdfTitle() || extractTitleFromPdfUrl(pdfUrl) || "PDF document",
+    pdfUrl: clean(pdfUrl),
+    pageUrl: clean(value?.pageUrl) || clean(location.href)
+  };
+}
+
+function hashString(value) {
+  let hash = 2166136261;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function getField(selector, prefix) {
@@ -1481,7 +2244,8 @@ function isArxivIdLikeTitle(value) {
 function displayPaperTitle(value) {
   const titleText = clean(value?.title);
   if (titleText && !isArxivIdLikeTitle(titleText)) return titleText;
-  return value?.id ? `arXiv ${value.id}` : "arXiv paper";
+  if (value?.sourceType === "pdf") return "PDF document";
+  return value?.id ? `arXiv ${value.id}` : "Paper";
 }
 
 function buildPaperMeta(value) {
@@ -1492,12 +2256,22 @@ function buildPaperMeta(value) {
     value?.paperUpdatedAt ? i18n.t(language, "updated", { date: value.paperUpdatedAt }) : "",
     value?.authors ? truncate(value.authors, 88) : "",
     value?.subjects ? truncate(value.subjects, 58) : "",
-    value?.id ? `arXiv ${value.id}` : ""
+    value?.sourceType === "pdf" ? "PDF" : value?.id ? `arXiv ${value.id}` : ""
   ].filter(Boolean).join(" · ");
 }
 
 function clean(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeTextBlock(value) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim();
 }
 
 function truncate(value, max) {
@@ -1554,6 +2328,9 @@ function escapeRegExp(value) {
 }
 
 function markdownToHtml(markdown) {
+  if (window.ArxivMateMarkdown?.toHtml) {
+    return window.ArxivMateMarkdown.toHtml(markdown, { headingOffset: 2 });
+  }
   const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
   const html = [];
   let listType = "";
@@ -1679,9 +2456,10 @@ function buildMarkdownNote(paper, summary, conversation) {
     : "";
 
   return [
-    `# ${paper.title || paper.id || "arXiv paper"}`,
+    `# ${paper.title || paper.id || "Paper"}`,
     "",
-    `- arXiv: ${paper.id || ""}`,
+    `- Type: ${paper.sourceType === "pdf" ? "PDF" : "arXiv"}`,
+    `- ID: ${paper.id || ""}`,
     `- Authors: ${paper.authors || ""}`,
     `- Subjects: ${paper.subjects || ""}`,
     `- PDF: ${paper.pdfUrl || ""}`,
