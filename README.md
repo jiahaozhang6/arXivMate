@@ -23,7 +23,7 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页或
 
 ## 当前状态
 
-- 当前版本：`0.1.7`
+- 当前版本：`0.1.8`
 - 安装方式：Chrome 未打包扩展
 - Chrome Web Store：暂未发布
 - 主要语言：支持跟随系统、中文、英文；会同时影响扩展界面和 LLM 输出语言
@@ -71,13 +71,13 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页或
 推荐普通用户使用这个方法。稳定版 ZIP 来自 GitHub Release，不会随着 `main` 分支变化而变化。
 
 1. 打开 [Releases](https://github.com/jiahaozhang6/arXivMate/releases)
-2. 选择最新稳定 Release，例如 `v0.1.7`
+2. 选择最新稳定 Release，例如 `v0.1.8`
 3. 下载该 Release 的 `Source code (zip)`
-4. 解压 ZIP，得到 `arXivMate-0.1.7` 文件夹
+4. 解压 ZIP，得到 `arXivMate-0.1.8` 文件夹
 5. 打开 Chrome：`chrome://extensions`
 6. 打开右上角 `开发者模式`
 7. 点击 `加载已解压的扩展程序`
-8. 选择解压后的 `arXivMate-0.1.7` 文件夹
+8. 选择解压后的 `arXivMate-0.1.8` 文件夹
 
 也可以直接打开最新稳定 Release：
 
@@ -105,7 +105,7 @@ git clone https://github.com/jiahaozhang6/arXivMate.git
 1. 点击 Chrome 工具栏中的 arXivMate 图标
 2. 打开 `设置`
 3. 在模型配置区新增一个模型 Profile
-4. 在右侧编辑 API Base URL、API Key、模型名称和上下文参数，保存后点击 `测试所选模型`
+4. 在右侧编辑 API Base URL、API Key、模型名称和上下文参数，保存后点击该模型卡片里的 `测试此模型`
 5. 打开任意 arXiv 论文页面，例如 `https://arxiv.org/abs/1706.03762`
 6. 点击页面右下角 `AI` 开始使用
 
@@ -153,12 +153,12 @@ git merge upstream/main
 当前推荐 Release 描述：
 
 ```text
-arXivMate v0.1.7 - per-chat model selection and stop generation
+arXivMate v0.1.8 - model refresh and per-profile testing
 
-This release starts new installs with an empty model list, removes the global active-model setting, lets users choose any saved model profile directly in the paper chat, adds a Stop action during generation, and updates the MiniMax preset to https://api.minimaxi.com/v1.
+This release refreshes saved model profiles whenever the paper assistant opens, regains focus, the model selector is opened, or a request starts, so newly saved models appear in chat without refreshing the arXiv page. It also moves model testing into each model editor card.
 ```
 
-用户侧更新检查以 GitHub Release 为准。发布新版本时请先更新 `manifest.json` 版本号，再创建同版本 tag 和 GitHub Release，例如 `v0.1.7`。README 和插件内下载按钮给普通用户的链接都应指向稳定 Release，而不是 `main` 分支 ZIP。
+用户侧更新检查以 GitHub Release 为准。发布新版本时请先更新 `manifest.json` 版本号，再创建同版本 tag 和 GitHub Release，例如 `v0.1.8`。README 和插件内下载按钮给普通用户的链接都应指向稳定 Release，而不是 `main` 分支 ZIP。
 
 ## 模型配置
 
@@ -363,7 +363,7 @@ It is not just a “summarize this paper” button. arXivMate is designed as a l
 
 ## Status
 
-- Version: `0.1.7`
+- Version: `0.1.8`
 - Installation: unpacked Chrome extension
 - Chrome Web Store: not published yet
 - Language: system default, Chinese, or English; controls both the extension UI and LLM output language
@@ -411,13 +411,13 @@ arXivMate is currently installed through Chrome’s “Load unpacked” flow.
 Recommended for most users. Stable ZIP archives come from GitHub Releases, so they do not move when the `main` branch changes.
 
 1. Open [Releases](https://github.com/jiahaozhang6/arXivMate/releases)
-2. Choose the latest stable Release, for example `v0.1.7`
+2. Choose the latest stable Release, for example `v0.1.8`
 3. Download `Source code (zip)` for that Release
-4. Unzip it to get an `arXivMate-0.1.7` folder
+4. Unzip it to get an `arXivMate-0.1.8` folder
 5. Open Chrome: `chrome://extensions`
 6. Enable `Developer mode`
 7. Click `Load unpacked`
-8. Select the unzipped `arXivMate-0.1.7` folder
+8. Select the unzipped `arXivMate-0.1.8` folder
 
 Direct link for the latest stable Release:
 
@@ -445,7 +445,7 @@ Then:
 1. Click the arXivMate icon in the Chrome toolbar
 2. Open `Settings`
 3. Create a model profile in the model configuration area
-4. Edit API Base URL, API key, model name, and context settings on the right, save, then click `Test selected model`
+4. Edit API Base URL, API key, model name, and context settings on the right, save, then click `Test this model` inside that model card
 5. Open any arXiv paper, for example `https://arxiv.org/abs/1706.03762`
 6. Click `AI` in the bottom-right corner of the page
 
@@ -493,12 +493,12 @@ git merge upstream/main
 Recommended Release description:
 
 ```text
-arXivMate v0.1.7 - per-chat model selection and stop generation
+arXivMate v0.1.8 - model refresh and per-profile testing
 
-This release starts new installs with an empty model list, removes the global active-model setting, lets users choose any saved model profile directly in the paper chat, adds a Stop action during generation, and updates the MiniMax preset to https://api.minimaxi.com/v1.
+This release refreshes saved model profiles whenever the paper assistant opens, regains focus, the model selector is opened, or a request starts, so newly saved models appear in chat without refreshing the arXiv page. It also moves model testing into each model editor card.
 ```
 
-User-side update checks are based on GitHub Releases. When publishing a new version, update `manifest.json` first, then create a matching tag and GitHub Release such as `v0.1.7`. README links and in-extension download buttons for regular users should point to stable Releases, not the moving `main` branch ZIP.
+User-side update checks are based on GitHub Releases. When publishing a new version, update `manifest.json` first, then create a matching tag and GitHub Release such as `v0.1.8`. README links and in-extension download buttons for regular users should point to stable Releases, not the moving `main` branch ZIP.
 
 ## Model Configuration
 

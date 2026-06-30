@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.8 - 2026-06-30
+
+Settings refresh fix.
+
+- Refresh model profiles from storage when the paper assistant opens, gains focus, the model selector is opened, or a request starts.
+- Move model testing into each model editor card and remove the global settings-page test button.
+- Rename the test action to "Test this model" / "测试此模型".
+
 ## 0.1.7 - 2026-06-30
 
 Model selection and cancellation polish.
