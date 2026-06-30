@@ -3,7 +3,7 @@ const DEFAULT_SETTINGS = {
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
   model: "gpt-4o-mini",
-  language: "中文",
+  language: "system",
   temperature: 0.2,
   maxContextChars: 14000,
   useAr5iv: true
@@ -207,7 +207,7 @@ async function saveSettings(settings) {
   const next = {
     ...DEFAULT_SETTINGS,
     ...(settings || {}),
-    language: normalizeString(settings?.language || DEFAULT_SETTINGS.language),
+    language: normalizeLanguage(settings?.language),
     activeProfileId: activeProfile.id,
     modelProfiles,
     ...flattenProfile(activeProfile)
@@ -743,7 +743,7 @@ function buildPrompt({ paper, mode, question, fullText, contextSource, language,
       role: "system",
       content: [
         "You are a rigorous research-reading assistant for arXiv papers.",
-        `Answer in ${language || "中文"}.`,
+        `Answer in ${resolveOutputLanguageInstruction(language)}.`,
         "Be precise and evidence-aware. Separate what the paper claims from what can be inferred.",
         "If the available context is only metadata or abstract, state that limitation clearly.",
         "Prefer structured Markdown with concise bullets and concrete learning actions."
@@ -1228,7 +1228,7 @@ function normalizeSettings(settings) {
   const merged = {
     ...DEFAULT_SETTINGS,
     ...(settings || {}),
-    language: normalizeString(settings?.language || DEFAULT_SETTINGS.language),
+    language: normalizeLanguage(settings?.language),
     activeProfileId: activeProfile.id,
     modelProfiles,
     ...flattenProfile(activeProfile)
@@ -1367,6 +1367,30 @@ function normalizeHistoryMessageChars(value) {
 
 function normalizeDefaultContextMode(value) {
   return value === "full" ? "full" : "fast";
+}
+
+function normalizeLanguage(value) {
+  const language = normalizeString(value);
+  if (language === "system" || language === "跟随系统") return "system";
+  if (language === "en" || language === "English") return "en";
+  if (language === "zh-CN" || language === "中文" || language === "Chinese") return "zh-CN";
+  return DEFAULT_SETTINGS.language;
+}
+
+function resolveOutputLanguageInstruction(language) {
+  const normalized = normalizeLanguage(language);
+  if (normalized === "zh-CN") return "Chinese";
+  if (normalized === "en") return "English";
+  const uiLanguage = getSystemLanguage();
+  return /^zh/i.test(uiLanguage) ? "Chinese" : "English";
+}
+
+function getSystemLanguage() {
+  try {
+    return chrome.i18n?.getUILanguage?.() || "";
+  } catch {
+    return "";
+  }
 }
 
 function getModelInputTokenLimit(model) {

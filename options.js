@@ -86,7 +86,7 @@ async function loadSettings() {
     settings = await sendMessage({ type: "getSettings" });
     profiles = normalizeProfiles(settings.modelProfiles, settings);
     activeProfileId = settings.activeProfileId || profiles[0]?.id || "";
-    form.language.value = settings.language || "中文";
+    form.language.value = normalizeLanguage(settings.language);
     renderProfiles();
   } catch (error) {
     setStatus(error.message || String(error), true);
@@ -97,7 +97,7 @@ async function saveCurrentSettings() {
   readProfilesFromDom();
   const next = {
     ...(settings || {}),
-    language: form.language.value,
+    language: normalizeLanguage(form.language.value),
     activeProfileId,
     modelProfiles: profiles
   };
@@ -360,6 +360,13 @@ function inferInputTokenCap(model) {
   if (name.startsWith("gpt-4o")) return 128000;
   if (name.includes("llama")) return 16000;
   return 32000;
+}
+
+function normalizeLanguage(value) {
+  if (value === "system" || value === "跟随系统") return "system";
+  if (value === "zh-CN" || value === "中文" || value === "Chinese") return "zh-CN";
+  if (value === "en" || value === "English") return "en";
+  return "system";
 }
 
 function inferProvider(baseUrl) {
