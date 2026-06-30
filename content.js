@@ -1,5 +1,6 @@
 (function () {
   if (!isRuntimeAvailable()) return;
+  const I18N = window.ArxivMateI18n;
   const embeddedPanelPaper = readEmbeddedPanelPaper();
   const isEmbeddedPanel = Boolean(embeddedPanelPaper);
   let paper = embeddedPanelPaper || extractPaper();
@@ -18,6 +19,7 @@
   let activeModelLabel = "";
   let renderTimer = 0;
   let activeAppearance = "system";
+  let currentLanguage = "system";
   let systemAppearanceQuery = null;
   let systemAppearanceListenerInstalled = false;
 
@@ -45,26 +47,26 @@
           <div class="alc-meta"></div>
         </div>
         <div class="alc-header-actions">
-          <button class="alc-icon-button alc-close" type="button" title="折叠分屏">×</button>
+          <button class="alc-icon-button alc-close" type="button" title="折叠分屏" data-i18n-title="closeSplit">×</button>
         </div>
       </header>
 
       <div class="alc-toolbar">
         <div class="alc-shortcuts">
-          <button data-mode="quick" type="button">速览</button>
-          <button data-mode="deep" type="button">深读</button>
-          <button data-mode="study" type="button">学习卡</button>
+          <button data-mode="quick" type="button" data-i18n="quick">速览</button>
+          <button data-mode="deep" type="button" data-i18n="deep">深读</button>
+          <button data-mode="study" type="button" data-i18n="study">学习卡</button>
         </div>
         <div class="alc-tools">
-          <label class="alc-toggle" title="下一次请求优先抽取当前 PDF 文本，失败时再尝试 ar5iv，速度会慢一些">
+          <label class="alc-toggle" title="下一次请求优先抽取当前 PDF 文本，失败时再尝试 ar5iv，速度会慢一些" data-i18n-title="fullTextTitle">
             <input class="alc-fulltext" type="checkbox">
-            <span>全文</span>
+            <span data-i18n="fullText">全文</span>
           </label>
-          <button class="alc-copy" type="button" title="复制 Markdown">复制</button>
-          <button class="alc-save" type="button" title="保存最后一条回答">保存</button>
-          <button class="alc-review" type="button" title="打开复盘库">历史</button>
-          <button class="alc-clear-chat" type="button" title="清空本篇对话">清空</button>
-          <button class="alc-options" type="button" title="设置">设置</button>
+          <button class="alc-copy" type="button" title="复制 Markdown" data-i18n="copy" data-i18n-title="copyMarkdown">复制</button>
+          <button class="alc-save" type="button" title="保存最后一条回答" data-i18n="save" data-i18n-title="saveLastAnswer">保存</button>
+          <button class="alc-review" type="button" title="打开复盘库" data-i18n="history" data-i18n-title="openReview">历史</button>
+          <button class="alc-clear-chat" type="button" title="清空本篇对话" data-i18n="clear" data-i18n-title="clearChat">清空</button>
+          <button class="alc-options" type="button" title="设置" data-i18n="settings" data-i18n-title="settings">设置</button>
         </div>
       </div>
 
@@ -73,8 +75,8 @@
       </div>
 
       <footer class="alc-composer">
-        <textarea rows="1" placeholder="问这篇论文：方法假设、实验设计、局限、和你的方向有什么关系..."></textarea>
-        <button class="alc-send" data-mode="ask" type="button">发送</button>
+        <textarea rows="1" placeholder="问这篇论文：方法假设、实验设计、局限、和你的方向有什么关系..." data-i18n-placeholder="askPlaceholder"></textarea>
+        <button class="alc-send" data-mode="ask" type="button" data-i18n="send">发送</button>
       </footer>
       <div class="alc-status" role="status"></div>
     </section>
@@ -91,6 +93,7 @@
   const chat = $(".alc-chat");
   const fullTextToggle = $(".alc-fulltext");
 
+  applyLanguage(currentLanguage);
   installPanelEventGuards();
   installSettingsChangeListener();
 
@@ -117,7 +120,7 @@
   onClick(".alc-clear-chat", clearCurrentConversation);
   fullTextToggle.addEventListener("change", () => {
     useFullTextNext = fullTextToggle.checked;
-    setStatus(useFullTextNext ? "下一次请求将优先抽取 PDF 文本，可能慢一些。" : "已切回快速模式。");
+    setStatus(useFullTextNext ? t("fullTextOn") : t("fullTextOff"));
   });
 
   shadow.querySelectorAll("[data-mode]").forEach((button) => {
@@ -360,16 +363,16 @@
   }
 
   async function runTurn(mode) {
-    const userText = mode === "ask" ? input.value.trim() : modeToUserText(mode);
+    const userText = mode === "ask" ? input.value.trim() : modeToUserText(mode, currentLanguage);
     if (mode === "ask" && !userText) {
-      setStatus("先写一个问题再发送。", true);
+      setStatus(t("emptyQuestion"), true);
       return;
     }
 
     currentMode = mode;
     const contextMode = useFullTextNext || mode === "deep" || mode === "study" ? "full" : "auto";
     setBusy(true);
-    setStatus(contextMode === "full" ? "正在抽取 PDF/正文文本并请求 LLM..." : "正在准备上下文并回答...");
+    setStatus(contextMode === "full" ? t("preparingFull") : t("preparingFast"));
     const preview = appendPreviewTurn(userText);
     if (mode === "ask") {
       input.value = "";
@@ -386,19 +389,19 @@
       }, {
         onMeta(meta) {
           const source = meta?.source ? ` · ${meta.source}` : "";
-          const usage = formatContextUsage(meta);
-          setStatus(`正在生成${source}${usage ? ` · ${usage}` : ""}`);
+          const usage = formatContextUsage(meta, currentLanguage);
+          setStatus(`${t("generating")}${source}${usage ? ` · ${usage}` : ""}`);
         },
         onDelta(text) {
-          updatePreviewAssistant(preview, text || "正在生成...");
+          updatePreviewAssistant(preview, text || t("generatedFallback"));
         }
       });
       currentResult = response.text;
       currentConversation = response.conversation || currentConversation;
       flushScheduledRender();
       renderConversation(currentConversation);
-      const usage = formatContextUsage(response);
-      setStatus(`完成 · ${response.source}${usage ? ` · ${usage}` : ""}`);
+      const usage = formatContextUsage(response, currentLanguage);
+      setStatus(`${t("done")} · ${response.source}${usage ? ` · ${usage}` : ""}`);
     } catch (error) {
       renderConversation(currentConversation);
       if (mode === "ask") input.value = userText;
@@ -427,9 +430,11 @@
     try {
       const settings = await sendMessage({ type: "getSettings" });
       activeModelLabel = settings.model ? ` · ${settings.model}` : "";
+      applyLanguage(settings.language);
       applyAppearance(settings.appearance);
     } catch {
       activeModelLabel = "";
+      applyLanguage("system");
       applyAppearance("system");
     }
     await loadConversation();
@@ -439,6 +444,7 @@
     try {
       chrome.storage?.onChanged?.addListener((changes, areaName) => {
         if (areaName !== "sync" || !changes.settings) return;
+        applyLanguage(changes.settings.newValue?.language);
         applyAppearance(changes.settings.newValue?.appearance);
         activeModelLabel = changes.settings.newValue?.model ? ` · ${changes.settings.newValue.model}` : "";
       });
@@ -474,15 +480,36 @@
     return "light";
   }
 
+  function applyLanguage(value) {
+    currentLanguage = normalizeLanguage(value);
+    const resolved = I18N.resolveLanguage(currentLanguage);
+    host.dataset.language = resolved;
+    shadow.querySelectorAll("[data-i18n]").forEach((node) => {
+      node.textContent = t(node.dataset.i18n);
+    });
+    shadow.querySelectorAll("[data-i18n-title]").forEach((node) => {
+      node.title = t(node.dataset.i18nTitle);
+    });
+    shadow.querySelectorAll("[data-i18n-placeholder]").forEach((node) => {
+      node.placeholder = t(node.dataset.i18nPlaceholder);
+    });
+    renderPaperHeader();
+    renderConversation(currentConversation);
+  }
+
+  function t(key, vars = {}) {
+    return I18N.t(currentLanguage, key, vars);
+  }
+
   async function loadConversation() {
     try {
       currentConversation = await sendMessage({ type: "getConversation", id: paper.id });
       renderConversation(currentConversation);
       if (currentConversation?.messageCount) {
         currentResult = findLastAssistantText(currentConversation);
-        setStatus(`已载入 ${currentConversation.turnCount || 0} 轮历史${activeModelLabel}。`);
+        setStatus(t("loadedHistory", { count: currentConversation.turnCount || 0, model: activeModelLabel }));
       } else {
-        setStatus(`快速模式默认只用摘要${activeModelLabel}；需要 PDF 正文时打开“全文”或点“深读”。`);
+        setStatus(t("defaultModeHint", { model: activeModelLabel }));
       }
     } catch (error) {
       setStatus(error.message || String(error), true);
@@ -492,7 +519,7 @@
   async function saveCurrentNote() {
     const latest = currentResult || findLastAssistantText(currentConversation);
     if (!latest) {
-      setStatus("还没有可保存的回答。", true);
+      setStatus(t("noAnswerToSave"), true);
       return;
     }
     setBusy(true);
@@ -503,7 +530,7 @@
         summary: latest,
         mode: currentMode
       });
-      setStatus("已保存到本地复盘库。");
+      setStatus(t("savedToReview"));
     } catch (error) {
       setStatus(error.message || String(error), true);
     } finally {
@@ -515,25 +542,25 @@
     const markdown = buildMarkdownNote(paper, currentResult || findLastAssistantText(currentConversation), currentConversation);
     try {
       await navigator.clipboard.writeText(markdown);
-      setStatus("已复制 Markdown。");
+      setStatus(t("copiedMarkdown"));
     } catch {
-      setStatus("复制失败，可以手动选中消息文本。", true);
+      setStatus(t("copyFailed"), true);
     }
   }
 
   async function clearCurrentConversation() {
     if (!currentConversation?.messageCount) {
-      setStatus("这篇论文还没有历史对话。");
+      setStatus(t("noHistory"));
       return;
     }
-    if (!confirm(`清空 ${paper.id} 的本地对话历史？`)) return;
+    if (!confirm(t("confirmClear", { id: paper.id }))) return;
     setBusy(true);
     try {
       await sendMessage({ type: "clearConversation", id: paper.id });
       currentConversation = null;
       currentResult = "";
       renderConversation(null);
-      setStatus("已清空本篇论文对话历史。");
+      setStatus(t("clearedHistory"));
     } catch (error) {
       setStatus(error.message || String(error), true);
     } finally {
@@ -555,7 +582,7 @@
         {
           id: "preview-assistant",
           role: "assistant",
-          text: "正在生成...",
+          text: t("generatedFallback"),
           streaming: true,
           createdAt: new Date().toISOString()
         }
@@ -587,8 +614,8 @@
     if (!messages.length) {
       chat.innerHTML = `
         <div class="alc-welcome">
-          <strong>开始读这篇论文</strong>
-          <p>点“速览”快速判断价值，点“深读”再拉正文。连续追问会自动保存在本篇论文历史里。</p>
+          <strong>${escapeHtml(t("welcomeTitle"))}</strong>
+          <p>${escapeHtml(t("welcomeBody"))}</p>
         </div>
       `;
       return;
@@ -597,7 +624,7 @@
     chat.innerHTML = messages.map((message) => `
       <article class="alc-message alc-message-${message.role}${message.streaming ? " is-streaming" : ""}">
         <div class="alc-bubble">
-          <div class="alc-message-meta">${message.role === "user" ? "你" : "AI"} · ${formatTime(message.createdAt)}${message.mode ? ` · ${escapeHtml(modeLabel(message.mode))}` : ""}${message.role === "assistant" ? formatMessageUsageMeta(message) : ""}</div>
+          <div class="alc-message-meta">${message.role === "user" ? escapeHtml(t("you")) : "AI"} · ${formatTime(message.createdAt, currentLanguage)}${message.mode ? ` · ${escapeHtml(modeLabel(message.mode, currentLanguage))}` : ""}${message.role === "assistant" ? formatMessageUsageMeta(message, currentLanguage) : ""}</div>
           <div class="alc-message-body">${message.role === "assistant" ? markdownToHtml(message.text || "") : escapeHtml(message.text || "")}</div>
         </div>
       </article>
@@ -623,10 +650,10 @@
     const text = normalizeErrorMessage(error);
     if (isExtensionContextInvalidated(error)) {
       setBusy(false);
-      setStatus("扩展刚刚重新加载过，请刷新当前 arXiv 页面后继续使用。", true);
+      setStatus(t("extensionReloaded"), true);
       return;
     }
-    setStatus(text || "插件通信失败，请刷新页面后重试。", true);
+    setStatus(text || t("extensionFailed"), true);
   }
 
   function safeSendRuntimeMessage(payload) {
@@ -921,6 +948,10 @@ function normalizeAppearance(value) {
   return "system";
 }
 
+function normalizeLanguage(value) {
+  return window.ArxivMateI18n.normalizeLanguage(value);
+}
+
 function resolveFrameAppearance(value) {
   const normalized = normalizeAppearance(value);
   if (normalized !== "system") return normalized;
@@ -979,17 +1010,19 @@ function isExtensionContextInvalidated(error) {
   return /extension context invalidated|context invalidated|extension context/i.test(normalizeErrorMessage(error));
 }
 
-function modeToUserText(mode) {
-  if (mode === "deep") return "请做一次适合认真读论文的深度解析。";
-  if (mode === "study") return "请把这篇论文转成每日学习材料。";
-  return "请快速总结这篇论文。";
+function modeToUserText(mode, language = "system") {
+  const i18n = window.ArxivMateI18n;
+  if (mode === "deep") return i18n.t(language, "modeDeepPrompt");
+  if (mode === "study") return i18n.t(language, "modeStudyPrompt");
+  return i18n.t(language, "modeQuickPrompt");
 }
 
-function modeLabel(mode) {
-  if (mode === "deep") return "深读";
-  if (mode === "study") return "学习卡";
-  if (mode === "ask") return "追问";
-  return "速览";
+function modeLabel(mode, language = "system") {
+  const i18n = window.ArxivMateI18n;
+  if (mode === "deep") return i18n.t(language, "deep");
+  if (mode === "study") return i18n.t(language, "study");
+  if (mode === "ask") return i18n.t(language, "ask");
+  return i18n.t(language, "quick");
 }
 
 function findLastAssistantText(conversation) {
@@ -1177,9 +1210,11 @@ function displayPaperTitle(value) {
 }
 
 function buildPaperMeta(value) {
+  const i18n = window.ArxivMateI18n;
+  const language = document.getElementById("arxiv-llm-companion-root")?.dataset?.language || "system";
   return [
-    value?.submittedAt ? `提交 ${value.submittedAt}` : "",
-    value?.paperUpdatedAt ? `更新 ${value.paperUpdatedAt}` : "",
+    value?.submittedAt ? i18n.t(language, "submitted", { date: value.submittedAt }) : "",
+    value?.paperUpdatedAt ? i18n.t(language, "updated", { date: value.paperUpdatedAt }) : "",
     value?.authors ? truncate(value.authors, 88) : "",
     value?.subjects ? truncate(value.subjects, 58) : "",
     value?.id ? `arXiv ${value.id}` : ""
@@ -1195,10 +1230,10 @@ function truncate(value, max) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-function formatTime(value) {
+function formatTime(value, language = "system") {
   if (!value) return "";
   try {
-    return new Intl.DateTimeFormat("zh-CN", {
+    return new Intl.DateTimeFormat(window.ArxivMateI18n.resolveLanguage(language), {
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",
@@ -1209,17 +1244,22 @@ function formatTime(value) {
   }
 }
 
-function formatContextUsage(value) {
+function formatContextUsage(value, language = "system") {
   const tokens = Number(value?.contextTokens);
   const windowTokens = Number(value?.contextWindow);
   if (!Number.isFinite(tokens) || tokens <= 0 || !Number.isFinite(windowTokens) || windowTokens <= 0) return "";
   const percent = Math.max(0, Math.min(100, Math.round((tokens / windowTokens) * 100)));
-  const capped = value?.contextCapped ? "，已裁剪" : "";
-  return `上下文 ${formatTokenCount(tokens)} / ${formatTokenCount(windowTokens)} (${percent}%${capped})`;
+  const i18n = window.ArxivMateI18n;
+  return i18n.t(language, "contextUsage", {
+    tokens: formatTokenCount(tokens),
+    window: formatTokenCount(windowTokens),
+    percent,
+    capped: value?.contextCapped ? i18n.t(language, "capped") : ""
+  });
 }
 
-function formatMessageUsageMeta(message) {
-  const usage = formatContextUsage(message);
+function formatMessageUsageMeta(message, language = "system") {
+  const usage = formatContextUsage(message, language);
   return usage ? ` · ${escapeHtml(usage)}` : "";
 }
 

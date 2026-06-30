@@ -13,7 +13,7 @@
           <p>arXivMate</p>
           <h1>模型配置</h1>
         </div>
-        <a href="review.html">打开复盘库</a>
+        <a href="review.html" data-i18n="openReview">打开复盘库</a>
       </header>
 
       <form id="settings-form" class="panel">
@@ -28,39 +28,70 @@
         <div id="profiles"></div>
 
         <label>
-          <span>输出语言</span>
+          <span data-i18n="language">语言</span>
           <select name="language">
-            <option value="system">跟随系统</option>
-            <option value="zh-CN">中文</option>
-            <option value="en">English</option>
+            <option value="system" data-i18n="system">跟随系统</option>
+            <option value="zh-CN" data-i18n="chinese">中文</option>
+            <option value="en" data-i18n="english">English</option>
           </select>
         </label>
 
         <label>
-          <span>背景主题</span>
+          <span data-i18n="appearance">背景主题</span>
           <select name="appearance">
-            <option value="system">跟随系统</option>
-            <option value="light">浅色</option>
-            <option value="dark">深色</option>
-            <option value="sepia">护眼</option>
+            <option value="system" data-i18n="system">跟随系统</option>
+            <option value="light" data-i18n="light">浅色</option>
+            <option value="dark" data-i18n="dark">深色</option>
+            <option value="sepia" data-i18n="sepia">护眼</option>
           </select>
         </label>
 
         <div class="actions">
-          <button type="submit">保存设置</button>
-          <button type="button" id="test-button">测试当前模型</button>
+          <button type="submit" data-i18n="saveSettings">保存设置</button>
+          <button type="button" id="test-button" data-i18n="testModel">测试当前模型</button>
         </div>
 
         <p id="status" role="status"></p>
       </form>
 
       <section class="panel">
-        <h2>推荐用法</h2>
+        <h2 data-i18n="recommendedUsage">推荐用法</h2>
         <ul>
-          <li>日常速览：选择便宜、速度快的模型，例如 DeepSeek flash 或 gpt-4o-mini。</li>
-          <li>深读全文：切到长上下文或质量更高的模型，再打开论文面板里的“全文”；DeepSeek/MiniMax 会使用 PDF 文本抽取上下文。</li>
-          <li>本地实验：保留一个 Ollama profile，不需要 API key。</li>
+          <li data-i18n="usageDaily">日常速览：选择便宜、速度快的模型，例如 DeepSeek flash 或 gpt-4o-mini。</li>
+          <li data-i18n="usageDeep">深读全文：切到长上下文或质量更高的模型，再打开论文面板里的“全文”；DeepSeek/MiniMax 会使用 PDF 文本抽取上下文。</li>
+          <li data-i18n="usageLocal">本地实验：保留一个 Ollama profile，不需要 API key。</li>
         </ul>
+      </section>
+
+      <section class="panel project-panel">
+        <h2 data-i18n="projectInfo">项目信息</h2>
+        <p data-i18n="projectDescription">arXivMate 是一个本地优先的 arXiv 论文阅读、对话和复盘 Chrome 扩展。</p>
+        <dl class="project-grid">
+          <div>
+            <dt data-i18n="githubRepo">GitHub 仓库</dt>
+            <dd><a href="https://github.com/jiahaozhang6/arXivMate" target="_blank" rel="noreferrer">github.com/jiahaozhang6/arXivMate</a></dd>
+          </div>
+          <div>
+            <dt data-i18n="author">作者</dt>
+            <dd>jiahaozhang6</dd>
+          </div>
+          <div>
+            <dt data-i18n="version">版本</dt>
+            <dd>0.1.0</dd>
+          </div>
+          <div>
+            <dt data-i18n="license">许可证</dt>
+            <dd>MIT</dd>
+          </div>
+        </dl>
+        <div class="update-box">
+          <div>
+            <strong data-i18n="updateStatus">更新状态</strong>
+            <p id="update-status"></p>
+            <small id="update-checked-at"></small>
+          </div>
+          <button type="button" id="check-update" data-i18n="checkUpdate">检查更新</button>
+        </div>
       </section>
     </main>
     <datalist id="model-presets">
@@ -70,6 +101,7 @@
       <option value="MiniMax-M3"></option>
       <option value="llama3.1"></option>
     </datalist>
+    <script src="i18n.js"></script>
     <script src="options.js"></script>
   </body>
 </html>

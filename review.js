@@ -2,21 +2,37 @@ const notesNode = document.querySelector("#notes");
 const searchNode = document.querySelector("#search");
 const countNode = document.querySelector("#count");
 const exportButton = document.querySelector("#export");
+const I18N = window.ArxivMateI18n;
 
 let notes = [];
+let currentLanguage = "system";
 
-applyStoredAppearance();
-loadNotes();
+loadSettingsAndNotes();
 searchNode.addEventListener("input", render);
 exportButton.addEventListener("click", exportMarkdown);
 
-async function applyStoredAppearance() {
+async function loadSettingsAndNotes() {
   try {
     const { settings = {} } = await chrome.storage.sync.get("settings");
+    currentLanguage = I18N.normalizeLanguage(settings.language);
     document.body.dataset.appearance = resolveAppearance(settings.appearance);
   } catch {
+    currentLanguage = "system";
     document.body.dataset.appearance = resolveAppearance("system");
   }
+  applyLanguage();
+  await loadNotes();
+}
+
+function applyLanguage() {
+  document.documentElement.lang = I18N.resolveLanguage(currentLanguage);
+  document.title = t("reviewTitle");
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    node.textContent = t(node.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => {
+    node.placeholder = t(node.dataset.i18nPlaceholder);
+  });
 }
 
 async function loadNotes() {
@@ -63,9 +79,9 @@ function render() {
     return !query || haystack.includes(query);
   });
 
-  countNode.textContent = `${filtered.length} / ${notes.length} 篇`;
+  countNode.textContent = t("paperCount", { shown: filtered.length, total: notes.length });
   if (!filtered.length) {
-    notesNode.innerHTML = `<div class="empty">还没有保存的论文笔记。</div>`;
+    notesNode.innerHTML = `<div class="empty">${escapeHtml(t("emptyNotes"))}</div>`;
     return;
   }
 
@@ -76,19 +92,19 @@ function render() {
           <h2>${escapeHtml(note.title || note.id)}</h2>
           <div class="meta">
             ${escapeHtml(note.id || "")}
-            ${note.submittedAt ? ` · 提交 ${escapeHtml(note.submittedAt)}` : ""}
-            ${note.paperUpdatedAt ? ` · 论文更新 ${escapeHtml(note.paperUpdatedAt)}` : ""}
+            ${note.submittedAt ? ` · ${escapeHtml(t("submittedMeta", { date: note.submittedAt }))}` : ""}
+            ${note.paperUpdatedAt ? ` · ${escapeHtml(t("paperUpdatedMeta", { date: note.paperUpdatedAt }))}` : ""}
             ${note.subjects ? ` · ${escapeHtml(note.subjects)}` : ""}
             ${note.updatedAt ? ` · ${escapeHtml(formatDate(note.updatedAt))}` : ""}
-            ${note.conversation?.turnCount ? ` · ${escapeHtml(String(note.conversation.turnCount))} 轮对话` : ""}
+            ${note.conversation?.turnCount ? ` · ${escapeHtml(t("turns", { count: note.conversation.turnCount }))}` : ""}
             ${note.pdfUrl ? ` · <a href="${escapeAttr(note.pdfUrl)}" target="_blank" rel="noreferrer">PDF</a>` : ""}
           </div>
           <div class="meta">${escapeHtml(note.authors || "")}</div>
         </div>
         <div class="note-actions">
-          <button class="secondary" data-action="copy">复制</button>
-          <button class="secondary" data-action="toggle">对话</button>
-          <button class="danger" data-action="delete">删除</button>
+          <button class="secondary" data-action="copy">${escapeHtml(t("copy"))}</button>
+          <button class="secondary" data-action="toggle">${escapeHtml(t("conversation"))}</button>
+          <button class="danger" data-action="delete">${escapeHtml(t("delete"))}</button>
         </div>
       </div>
       <div class="summary">${escapeHtml(note.summary || "")}</div>
@@ -109,9 +125,9 @@ async function handleNoteAction(event) {
 
   if (event.target.dataset.action === "copy") {
     await navigator.clipboard.writeText(buildMarkdown(note));
-    event.target.textContent = "已复制";
+    event.target.textContent = t("copied");
     setTimeout(() => {
-      event.target.textContent = "复制";
+      event.target.textContent = t("copy");
     }, 1200);
     return;
   }
@@ -120,12 +136,12 @@ async function handleNoteAction(event) {
     const conversation = article.querySelector(".conversation");
     if (!conversation) return;
     conversation.hidden = !conversation.hidden;
-    event.target.textContent = conversation.hidden ? "对话" : "收起";
+    event.target.textContent = conversation.hidden ? t("conversation") : t("collapse");
     return;
   }
 
   if (event.target.dataset.action === "delete") {
-    if (!confirm(`删除 ${note.id} 的本地笔记和对话历史？`)) return;
+    if (!confirm(t("confirmDelete", { id: note.id }))) return;
     const { notes: noteMap = {}, conversations = {} } = await chrome.storage.local.get(["notes", "conversations"]);
     delete noteMap[id];
     delete conversations[id];
@@ -161,10 +177,10 @@ function buildMarkdown(note) {
     `- Updated: ${note.updatedAt || ""}`,
     `- PDF: ${note.pdfUrl || ""}`,
     "",
-    "## Abstract",
+    `## ${t("noteAbstract")}`,
     note.abstract || "",
     "",
-    "## LLM Note",
+    `## ${t("noteLLMNote")}`,
     note.summary || "",
     "",
     "## Conversation",
@@ -174,10 +190,10 @@ function buildMarkdown(note) {
 
 function renderConversation(conversation) {
   const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
-  if (!messages.length) return `<div class="empty-inline">暂无对话历史。</div>`;
+  if (!messages.length) return `<div class="empty-inline">${escapeHtml(t("noConversation"))}</div>`;
   return messages.map((message) => `
       <div class="message ${escapeAttr(message.role)}">
-      <div class="message-meta">${message.role === "user" ? "你" : "AI"} · ${escapeHtml(formatDate(message.createdAt))}${message.mode ? ` · ${escapeHtml(modeLabel(message.mode))}` : ""}${message.role === "assistant" ? formatMessageUsageMeta(message) : ""}</div>
+      <div class="message-meta">${message.role === "user" ? escapeHtml(t("you")) : "AI"} · ${escapeHtml(formatDate(message.createdAt))}${message.mode ? ` · ${escapeHtml(modeLabel(message.mode))}` : ""}${message.role === "assistant" ? formatMessageUsageMeta(message) : ""}</div>
       <div class="message-body">${escapeHtml(message.text || "")}</div>
     </div>
   `).join("");
@@ -199,10 +215,10 @@ function conversationToSearchText(conversation) {
 }
 
 function modeLabel(mode) {
-  if (mode === "deep") return "深读";
-  if (mode === "study") return "学习卡";
-  if (mode === "ask") return "追问";
-  return "速览";
+  if (mode === "deep") return t("deep");
+  if (mode === "study") return t("study");
+  if (mode === "ask") return t("ask");
+  return t("quick");
 }
 
 function maxDate(left, right) {
@@ -213,7 +229,7 @@ function maxDate(left, right) {
 
 function formatDate(value) {
   try {
-    return new Intl.DateTimeFormat("zh-CN", {
+    return new Intl.DateTimeFormat(I18N.resolveLanguage(currentLanguage), {
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -230,8 +246,13 @@ function formatMessageUsageMeta(message) {
   const windowTokens = Number(message?.contextWindow);
   if (!Number.isFinite(tokens) || tokens <= 0 || !Number.isFinite(windowTokens) || windowTokens <= 0) return "";
   const percent = Math.max(0, Math.min(100, Math.round((tokens / windowTokens) * 100)));
-  const capped = message.contextCapped ? "，已裁剪" : "";
-  return ` · ${escapeHtml(`上下文 ${formatTokenCount(tokens)} / ${formatTokenCount(windowTokens)} (${percent}%${capped})`)}`;
+  const usage = t("contextUsage", {
+    tokens: formatTokenCount(tokens),
+    window: formatTokenCount(windowTokens),
+    percent,
+    capped: message.contextCapped ? t("capped") : ""
+  });
+  return ` · ${escapeHtml(usage)}`;
 }
 
 function formatTokenCount(value) {
@@ -258,6 +279,10 @@ function resolveAppearance(value) {
   if (normalized !== "system") return normalized;
   if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
   return "light";
+}
+
+function t(key, vars = {}) {
+  return I18N.t(currentLanguage, key, vars);
 }
 
 function escapeHtml(value) {

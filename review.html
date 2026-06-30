@@ -11,21 +11,22 @@
       <header class="hero">
         <div>
           <p>arXivMate</p>
-          <h1>论文复盘库</h1>
+          <h1 data-i18n="reviewLibrary">论文复盘库</h1>
         </div>
         <div class="actions">
-          <button id="export">导出 Markdown</button>
-          <a href="options.html">设置</a>
+          <button id="export" data-i18n="exportMarkdown">导出 Markdown</button>
+          <a href="options.html" data-i18n="settings">设置</a>
         </div>
       </header>
 
       <section class="toolbar">
-        <input id="search" placeholder="搜索标题、作者、分类或总结">
+        <input id="search" placeholder="搜索标题、作者、分类或总结" data-i18n-placeholder="searchPlaceholder">
         <span id="count"></span>
       </section>
 
       <section id="notes" class="notes"></section>
     </main>
+    <script src="i18n.js"></script>
     <script src="review.js"></script>
   </body>
 </html>

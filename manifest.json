@@ -27,6 +27,7 @@
         "https://www.arxiv.org/pdf/*"
       ],
       "js": [
+        "i18n.js",
         "content.js"
       ],
       "run_at": "document_idle"
@@ -36,6 +37,7 @@
     {
       "resources": [
         "content.css",
+        "i18n.js",
         "content.js",
         "panel.html",
         "vendor/pdfjs/pdf.js",

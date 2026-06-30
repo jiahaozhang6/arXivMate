@@ -3,6 +3,11 @@ const statusNode = document.querySelector("#status");
 const testButton = document.querySelector("#test-button");
 const addProfileButton = document.querySelector("#add-profile");
 const profilesNode = document.querySelector("#profiles");
+const updateBox = document.querySelector(".update-box");
+const updateStatusNode = document.querySelector("#update-status");
+const updateCheckedAtNode = document.querySelector("#update-checked-at");
+const checkUpdateButton = document.querySelector("#check-update");
+const I18N = window.ArxivMateI18n;
 
 const PROVIDER_PRESETS = {
   openai: {
@@ -35,6 +40,7 @@ const PROVIDER_PRESETS = {
 let settings = null;
 let profiles = [];
 let activeProfileId = "";
+let currentLanguage = "system";
 
 loadSettings();
 
@@ -47,27 +53,37 @@ addProfileButton.addEventListener("click", () => {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  setStatus("正在保存...");
+  setStatus(t("saving"));
   try {
     await saveCurrentSettings();
-    setStatus("设置已保存。arXiv 页面会使用当前启用模型。");
+    setStatus(t("settingsSaved"));
   } catch (error) {
     setStatus(error.message || String(error), true);
   }
+});
+
+form.language.addEventListener("change", () => {
+  currentLanguage = normalizeLanguage(form.language.value);
+  applyLanguage(currentLanguage);
+  renderProfiles();
 });
 
 form.appearance.addEventListener("change", () => {
   applyAppearance(form.appearance.value);
 });
 
+checkUpdateButton.addEventListener("click", () => {
+  checkForUpdate(true);
+});
+
 testButton.addEventListener("click", async () => {
-  setStatus("正在测试当前模型...");
+  setStatus(t("testing"));
   try {
     await saveCurrentSettings();
     const response = await sendMessage({
       type: "summarizePaper",
       mode: "ask",
-      question: "请只回复：连接正常。",
+      question: t("testQuestion"),
       persist: false,
       contextMode: "fast",
       paper: {
@@ -79,7 +95,7 @@ testButton.addEventListener("click", async () => {
         pdfUrl: ""
       }
     });
-    setStatus(`连接成功：${response.text.slice(0, 100)}`);
+    setStatus(t("testSuccess", { text: response.text.slice(0, 100) }));
   } catch (error) {
     setStatus(error.message || String(error), true);
   }
@@ -91,9 +107,12 @@ async function loadSettings() {
     profiles = normalizeProfiles(settings.modelProfiles, settings);
     activeProfileId = settings.activeProfileId || profiles[0]?.id || "";
     form.language.value = normalizeLanguage(settings.language);
+    currentLanguage = form.language.value;
     form.appearance.value = normalizeAppearance(settings.appearance);
     applyAppearance(form.appearance.value);
+    applyLanguage(currentLanguage);
     renderProfiles();
+    checkForUpdate(false);
   } catch (error) {
     setStatus(error.message || String(error), true);
   }
@@ -125,19 +144,19 @@ function renderProfiles() {
       <header class="profile-header">
         <label class="active-choice">
           <input type="radio" name="activeProfile" value="${escapeAttr(profile.id)}" ${profile.id === activeProfileId ? "checked" : ""}>
-          <span>当前启用</span>
+          <span>${escapeHtml(t("currentEnabled"))}</span>
         </label>
         <strong>${escapeHtml(profile.name || `模型 ${index + 1}`)}</strong>
-        <button type="button" data-action="remove" ${profiles.length <= 1 ? "disabled" : ""}>删除</button>
+        <button type="button" data-action="remove" ${profiles.length <= 1 ? "disabled" : ""}>${escapeHtml(t("remove"))}</button>
       </header>
 
       <div class="profile-grid">
         <label>
-          <span>名称</span>
+          <span>${escapeHtml(t("name"))}</span>
           <input data-field="name" value="${escapeAttr(profile.name)}" placeholder="DeepSeek fast">
         </label>
         <label>
-          <span>供应商</span>
+          <span>${escapeHtml(t("provider"))}</span>
           <select data-field="provider">
             ${Object.entries(PROVIDER_PRESETS).map(([key, preset]) => `
               <option value="${key}" ${profile.provider === key ? "selected" : ""}>${escapeHtml(preset.label)}</option>
@@ -153,49 +172,49 @@ function renderProfiles() {
           <input data-field="apiKey" type="password" autocomplete="off" value="${escapeAttr(profile.apiKey)}" placeholder="sk-...">
         </label>
         <label>
-          <span>模型名称</span>
+          <span>${escapeHtml(t("modelName"))}</span>
           <input data-field="model" list="model-presets" value="${escapeAttr(profile.model)}" placeholder="gpt-4o-mini">
         </label>
       </div>
 
       <details class="profile-advanced">
-        <summary>高级：上下文、历史与输出预算</summary>
+        <summary>${escapeHtml(t("advanced"))}</summary>
         <div class="profile-grid">
         <label>
           <span>Temperature</span>
           <input data-field="temperature" type="number" min="0" max="2" step="0.1" value="${escapeAttr(profile.temperature)}">
         </label>
         <label>
-          <span>输出 tokens</span>
+          <span>${escapeHtml(t("outputTokens"))}</span>
           <input data-field="maxOutputTokens" type="number" min="128" max="64000" step="1" value="${escapeAttr(profile.maxOutputTokens)}">
         </label>
         <label>
-          <span>上下文窗口 tokens</span>
+          <span>${escapeHtml(t("contextWindowTokens"))}</span>
           <input data-field="inputTokenCap" type="number" min="1000" max="1000000" step="1000" value="${escapeAttr(profile.inputTokenCap)}">
-          <small>通常保持自动值即可；只有模型窗口识别不准或自定义代理时再改。</small>
+          <small>${escapeHtml(t("contextWindowHelp"))}</small>
         </label>
         <label>
-          <span>正文字符数</span>
+          <span>${escapeHtml(t("bodyChars"))}</span>
           <input data-field="maxContextChars" type="number" min="4000" max="60000" step="1000" value="${escapeAttr(profile.maxContextChars)}">
         </label>
         <label>
-          <span>历史轮数</span>
+          <span>${escapeHtml(t("historyTurns"))}</span>
           <input data-field="historyTurns" type="number" min="0" max="20" step="1" value="${escapeAttr(profile.historyTurns)}">
         </label>
         <label>
-          <span>单条历史字符</span>
+          <span>${escapeHtml(t("historyMessageChars"))}</span>
           <input data-field="historyMessageChars" type="number" min="400" max="8000" step="200" value="${escapeAttr(profile.historyMessageChars)}">
         </label>
         <label>
-          <span>默认上下文</span>
+          <span>${escapeHtml(t("defaultContext"))}</span>
           <select data-field="defaultContextMode">
-            <option value="fast" ${profile.defaultContextMode !== "full" ? "selected" : ""}>快速：摘要 + 历史</option>
-            <option value="full" ${profile.defaultContextMode === "full" ? "selected" : ""}>全文：优先 PDF 文本抽取</option>
+            <option value="fast" ${profile.defaultContextMode !== "full" ? "selected" : ""}>${escapeHtml(t("fastContext"))}</option>
+            <option value="full" ${profile.defaultContextMode === "full" ? "selected" : ""}>${escapeHtml(t("fullContext"))}</option>
           </select>
         </label>
         <label class="checkbox">
           <input data-field="useAr5iv" type="checkbox" ${profile.useAr5iv ? "checked" : ""}>
-          <span>PDF 抽取失败时允许读取 ar5iv</span>
+          <span>${escapeHtml(t("allowAr5iv"))}</span>
         </label>
         </div>
       </details>
@@ -370,10 +389,7 @@ function inferInputTokenCap(model) {
 }
 
 function normalizeLanguage(value) {
-  if (value === "system" || value === "跟随系统") return "system";
-  if (value === "zh-CN" || value === "中文" || value === "Chinese") return "zh-CN";
-  if (value === "en" || value === "English") return "en";
-  return "system";
+  return I18N.normalizeLanguage(value);
 }
 
 function normalizeAppearance(value) {
@@ -393,6 +409,74 @@ function resolveAppearance(value) {
   if (normalized !== "system") return normalized;
   if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
   return "light";
+}
+
+function applyLanguage(value) {
+  currentLanguage = normalizeLanguage(value);
+  const resolved = I18N.resolveLanguage(currentLanguage);
+  document.documentElement.lang = resolved;
+  document.title = t("optionsTitle");
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    node.textContent = t(node.dataset.i18n);
+  });
+  document.querySelector(".hero h1").textContent = t("modelConfig");
+  document.querySelector(".section-head h2").textContent = t("modelProfiles");
+  document.querySelector(".section-head p").textContent = t("profilesHelp");
+  addProfileButton.textContent = t("addProfile");
+  checkUpdateButton.textContent = t("checkUpdate");
+}
+
+function t(key, vars = {}) {
+  return I18N.t(currentLanguage, key, vars);
+}
+
+async function checkForUpdate(force) {
+  updateBox.classList.remove("is-update", "is-error");
+  updateStatusNode.textContent = t("checkingUpdate");
+  updateCheckedAtNode.textContent = "";
+  checkUpdateButton.disabled = true;
+  try {
+    const result = await sendMessage({ type: "checkForUpdate", force });
+    renderUpdateStatus(result);
+  } catch (error) {
+    renderUpdateStatus({ error: error.message || String(error) });
+  } finally {
+    checkUpdateButton.disabled = false;
+  }
+}
+
+function renderUpdateStatus(result) {
+  updateBox.classList.toggle("is-update", Boolean(result?.updateAvailable));
+  updateBox.classList.toggle("is-error", Boolean(result?.error));
+  if (result?.error) {
+    updateStatusNode.textContent = t("updateCheckFailed", { error: result.error });
+  } else if (result?.updateAvailable) {
+    updateStatusNode.textContent = t("updateAvailable", {
+      local: result.localVersion,
+      latest: result.latestVersion
+    });
+  } else {
+    updateStatusNode.textContent = t("upToDate", { version: result?.localVersion || chrome.runtime.getManifest().version });
+  }
+  const checkedAt = formatUpdateTime(result?.checkedAt);
+  updateCheckedAtNode.textContent = [
+    checkedAt ? t("updateCheckedAt", { time: checkedAt }) : "",
+    result?.updateAvailable ? t("updateCommands") : ""
+  ].filter(Boolean).join(" ");
+}
+
+function formatUpdateTime(value) {
+  if (!value) return "";
+  try {
+    return new Intl.DateTimeFormat(I18N.resolveLanguage(currentLanguage), {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
 }
 
 function inferProvider(baseUrl) {

@@ -9,10 +9,12 @@
   <body>
     <main>
       <h1>arXivMate</h1>
-      <p id="status">打开 arXiv 论文页后，右下角会出现 AI 按钮。</p>
-      <button id="options">设置</button>
-      <button id="review">复盘库</button>
+      <p id="status" data-i18n="popupStatusDefault">打开 arXiv 论文页后，右下角会出现 AI 按钮。</p>
+      <p id="update-status" class="update-status"></p>
+      <button id="options" data-i18n="settings">设置</button>
+      <button id="review" data-i18n="reviewLibraryShort">复盘库</button>
     </main>
+    <script src="i18n.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

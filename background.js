@@ -30,6 +30,8 @@ const MAX_CONTEXT_CACHE_ENTRIES = 80;
 const PDF_TEXT_MIN_CHARS = 1600;
 const PDF_EXTRACT_MAX_PAGES = 80;
 const PDF_TEXT_CONTEXT_SOURCE = "PDF 文本抽取（未上传 PDF 文件）+ arXiv 页面元数据";
+const GITHUB_MANIFEST_URL = "https://raw.githubusercontent.com/jiahaozhang6/arXivMate/main/manifest.json";
+const UPDATE_CHECK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 let pdfjsReady = null;
 
@@ -192,8 +194,53 @@ async function handleMessage(message) {
       return openExtensionPage("review.html");
     case "openOptions":
       return openOptionsPage();
+    case "checkForUpdate":
+      return checkForUpdate({ force: message.force === true });
     default:
       throw new Error("Unknown message type.");
+  }
+}
+
+async function checkForUpdate({ force = false } = {}) {
+  const localVersion = chrome.runtime.getManifest().version;
+  const now = Date.now();
+  const { updateCheck } = await chrome.storage.local.get("updateCheck");
+  if (!force && updateCheck?.checkedAt && now - updateCheck.checkedAt < UPDATE_CHECK_CACHE_TTL_MS) {
+    return {
+      ...updateCheck,
+      localVersion,
+      updateAvailable: compareVersions(updateCheck.latestVersion, localVersion) > 0
+    };
+  }
+
+  try {
+    const response = await fetch(`${GITHUB_MANIFEST_URL}?t=${now}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
+    const remoteManifest = await response.json();
+    const latestVersion = normalizeString(remoteManifest.version);
+    if (!latestVersion) throw new Error("Remote manifest has no version.");
+    const result = {
+      localVersion,
+      latestVersion,
+      updateAvailable: compareVersions(latestVersion, localVersion) > 0,
+      checkedAt: new Date(now).toISOString(),
+      sourceUrl: GITHUB_MANIFEST_URL,
+      repositoryUrl: "https://github.com/jiahaozhang6/arXivMate",
+      error: ""
+    };
+    await chrome.storage.local.set({ updateCheck: result });
+    return result;
+  } catch (error) {
+    const fallback = {
+      localVersion,
+      latestVersion: updateCheck?.latestVersion || localVersion,
+      updateAvailable: updateCheck?.latestVersion ? compareVersions(updateCheck.latestVersion, localVersion) > 0 : false,
+      checkedAt: updateCheck?.checkedAt || "",
+      sourceUrl: GITHUB_MANIFEST_URL,
+      repositoryUrl: "https://github.com/jiahaozhang6/arXivMate",
+      error: error.message || String(error)
+    };
+    return fallback;
   }
 }
 
@@ -726,6 +773,8 @@ function findLastIndex(array, predicate) {
 }
 
 function buildPrompt({ paper, mode, question, fullText, contextSource, language, conversationMessages = [] }) {
+  const outputLanguage = resolveOutputLanguageInstruction(language);
+  const promptLanguage = resolveOutputLanguageCode(language);
   const paperBlock = [
     `Title: ${paper.title || "Unknown"}`,
     `arXiv ID: ${paper.id || "Unknown"}`,
@@ -739,13 +788,13 @@ function buildPrompt({ paper, mode, question, fullText, contextSource, language,
     fullText ? `Full text excerpt:\n${fullText}` : ""
   ].filter(Boolean).join("\n\n");
 
-  const modeInstruction = getModeInstruction(mode, question);
+  const modeInstruction = getModeInstruction(mode, question, promptLanguage);
   const messages = [
     {
       role: "system",
       content: [
         "You are a rigorous research-reading assistant for arXiv papers.",
-        `Answer in ${resolveOutputLanguageInstruction(language)}.`,
+        `Answer in ${outputLanguage}.`,
         "Be precise and evidence-aware. Separate what the paper claims from what can be inferred.",
         "If the available context is only metadata or abstract, state that limitation clearly.",
         "Prefer structured Markdown with concise bullets and concrete learning actions."
@@ -754,8 +803,8 @@ function buildPrompt({ paper, mode, question, fullText, contextSource, language,
     {
       role: "user",
       content: [
-        `Context source: ${contextSource}.`,
-        "Paper context:",
+        `${promptLanguage === "zh-CN" ? "上下文来源" : "Context source"}: ${contextSource}.`,
+        promptLanguage === "zh-CN" ? "论文上下文：" : "Paper context:",
         paperBlock
       ].join("\n")
     }
@@ -776,7 +825,55 @@ function buildPrompt({ paper, mode, question, fullText, contextSource, language,
   return messages;
 }
 
-function getModeInstruction(mode, question) {
+function getModeInstruction(mode, question, language = "zh-CN") {
+  if (language === "en") {
+    if (mode === "deep") {
+      return [
+        "Please provide a deep reading analysis suitable for seriously studying this paper. Include:",
+        "1. The core problem this paper addresses, and why the problem matters.",
+        "2. The limitations of related or prior methods, and the gap the authors claim.",
+        "3. The main method: inputs, key modules, training/inference flow, objective functions, or algorithmic ideas.",
+        "4. Experimental design: datasets, baselines, metrics, ablations, main results, and a distinction between factual results and author interpretation.",
+        "5. Key assumptions, limitations, failure cases, and practical reproducibility risks.",
+        "6. The 5 most valuable follow-up questions if I want to keep researching this direction.",
+        "7. A final takeaway in no more than 5 lines."
+      ].join("\n");
+    }
+
+    if (mode === "study") {
+      return [
+        "Please turn this paper into daily study material. Include:",
+        "1. A 15-minute skim route: which figures/tables/sections to inspect first, and what to capture.",
+        "2. A 45-60 minute close-reading route with step-by-step reading tasks.",
+        "3. Background knowledge and keywords I should learn.",
+        "4. 5 active-recall questions with short reference answers.",
+        "5. 3 Anki-style cards in Q: / A: format.",
+        "6. One executable mini reproduction or extension exercise.",
+        "7. A Markdown note template suitable for Zotero/Obsidian."
+      ].join("\n");
+    }
+
+    if (mode === "ask") {
+      return [
+        "Please answer my specific question based on the paper context.",
+        `Question: ${question || "Which parts of this paper are most worth reading carefully?"}`,
+        "If the context is insufficient for a reliable answer, explain what is missing and suggest the next reading step."
+      ].join("\n");
+    }
+
+    return [
+      "Please quickly summarize this paper with the following structure:",
+      "1. One-sentence summary.",
+      "2. Research problem: what exactly is it trying to solve?",
+      "3. Method: what is the core method/model/algorithm?",
+      "4. Results: what are the most important experimental findings?",
+      "5. Contribution: what is new compared with prior work?",
+      "6. Limitations: which conclusions should be treated cautiously?",
+      "7. Today's study advice: which 2-3 parts should I focus on?",
+      "8. 3 follow-up questions to help me decide whether this paper deserves a deep read."
+    ].join("\n");
+  }
+
   if (mode === "deep") {
     return [
       "请做一次适合认真读论文的深度解析，包含：",
@@ -1389,6 +1486,19 @@ function normalizeAppearance(value) {
   return DEFAULT_SETTINGS.appearance;
 }
 
+function compareVersions(left, right) {
+  const leftParts = normalizeString(left).split(/[.-]/).map((part) => Number.parseInt(part, 10));
+  const rightParts = normalizeString(right).split(/[.-]/).map((part) => Number.parseInt(part, 10));
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = Number.isFinite(leftParts[index]) ? leftParts[index] : 0;
+    const rightValue = Number.isFinite(rightParts[index]) ? rightParts[index] : 0;
+    if (leftValue > rightValue) return 1;
+    if (leftValue < rightValue) return -1;
+  }
+  return 0;
+}
+
 function resolveOutputLanguageInstruction(language) {
   const normalized = normalizeLanguage(language);
   if (normalized === "zh-CN") return "Chinese";
@@ -1397,9 +1507,15 @@ function resolveOutputLanguageInstruction(language) {
   return /^zh/i.test(uiLanguage) ? "Chinese" : "English";
 }
 
+function resolveOutputLanguageCode(language) {
+  const normalized = normalizeLanguage(language);
+  if (normalized === "zh-CN" || normalized === "en") return normalized;
+  return /^zh/i.test(getSystemLanguage()) ? "zh-CN" : "en";
+}
+
 function getSystemLanguage() {
   try {
-    return chrome.i18n?.getUILanguage?.() || "";
+    return chrome.i18n?.getUILanguage?.() || navigator.language || "";
   } catch {
     return "";
   }

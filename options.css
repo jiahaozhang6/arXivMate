@@ -138,6 +138,79 @@ label span,
   font-size: 18px;
 }
 
+.project-panel p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 18px 0 0;
+}
+
+.project-grid div {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 12px;
+}
+
+.project-grid dt {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.project-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.update-box {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 12px;
+}
+
+.update-box strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.update-box p,
+.update-box small {
+  display: block;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.update-box.is-update p {
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.update-box.is-error p {
+  color: var(--error);
+  font-weight: 800;
+}
+
+.update-box button {
+  flex: 0 0 auto;
+}
+
 input,
 select {
   width: 100%;
@@ -312,5 +385,13 @@ ul {
 
   .profile-grid {
     grid-template-columns: 1fr;
+  }
+
+  .project-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .update-box {
+    flex-direction: column;
   }
 }
