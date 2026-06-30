@@ -17,6 +17,9 @@
   let useFullTextNext = false;
   let activeModelLabel = "";
   let renderTimer = 0;
+  let activeAppearance = "system";
+  let systemAppearanceQuery = null;
+  let systemAppearanceListenerInstalled = false;
 
   const host = document.createElement("div");
   host.id = "arxiv-llm-companion-root";
@@ -89,6 +92,7 @@
   const fullTextToggle = $(".alc-fulltext");
 
   installPanelEventGuards();
+  installSettingsChangeListener();
 
   renderPaperHeader();
 
@@ -423,10 +427,51 @@
     try {
       const settings = await sendMessage({ type: "getSettings" });
       activeModelLabel = settings.model ? ` · ${settings.model}` : "";
+      applyAppearance(settings.appearance);
     } catch {
       activeModelLabel = "";
+      applyAppearance("system");
     }
     await loadConversation();
+  }
+
+  function installSettingsChangeListener() {
+    try {
+      chrome.storage?.onChanged?.addListener((changes, areaName) => {
+        if (areaName !== "sync" || !changes.settings) return;
+        applyAppearance(changes.settings.newValue?.appearance);
+        activeModelLabel = changes.settings.newValue?.model ? ` · ${changes.settings.newValue.model}` : "";
+      });
+    } catch {
+      // Storage listeners are optional; initial settings still cover normal page loads.
+    }
+  }
+
+  function applyAppearance(value) {
+    activeAppearance = normalizeAppearance(value);
+    installSystemAppearanceListener();
+    host.dataset.appearance = resolveAppearance(activeAppearance);
+  }
+
+  function installSystemAppearanceListener() {
+    if (activeAppearance !== "system" || systemAppearanceListenerInstalled || !window.matchMedia) return;
+    systemAppearanceQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const update = () => {
+      if (activeAppearance === "system") host.dataset.appearance = resolveAppearance(activeAppearance);
+    };
+    if (systemAppearanceQuery.addEventListener) {
+      systemAppearanceQuery.addEventListener("change", update);
+    } else if (systemAppearanceQuery.addListener) {
+      systemAppearanceQuery.addListener(update);
+    }
+    systemAppearanceListenerInstalled = true;
+  }
+
+  function resolveAppearance(value) {
+    const normalized = normalizeAppearance(value);
+    if (normalized !== "system") return normalized;
+    if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
+    return "light";
   }
 
   async function loadConversation() {
@@ -718,6 +763,9 @@
         cursor: pointer;
       }
       .alc-frame {
+        --alc-frame-panel: #fff;
+        --alc-frame-line: #d9e0e6;
+        --alc-frame-shadow: -8px 0 24px rgba(31, 35, 40, 0.16);
         position: fixed;
         top: 0;
         right: 0;
@@ -726,10 +774,20 @@
         width: var(--alc-split-width, 460px);
         display: none;
         overflow: hidden;
-        border-left: 1px solid #d9e0e6;
+        border-left: 1px solid var(--alc-frame-line);
         border-radius: 0;
-        background: #fff;
-        box-shadow: -8px 0 24px rgba(31, 35, 40, 0.16);
+        background: var(--alc-frame-panel);
+        box-shadow: var(--alc-frame-shadow);
+      }
+      :host([data-appearance="dark"]) .alc-frame {
+        --alc-frame-panel: #161a1f;
+        --alc-frame-line: #303942;
+        --alc-frame-shadow: -8px 0 24px rgba(0, 0, 0, 0.32);
+      }
+      :host([data-appearance="sepia"]) .alc-frame {
+        --alc-frame-panel: #fffaf0;
+        --alc-frame-line: #ded0b8;
+        --alc-frame-shadow: -8px 0 24px rgba(70, 58, 42, 0.15);
       }
       .alc-frame.is-open {
         display: block;
@@ -739,7 +797,7 @@
         height: 100%;
         border: 0;
         display: block;
-        background: #fff;
+        background: transparent;
       }
       .alc-frame-fab.is-hidden {
         display: none;
@@ -767,6 +825,28 @@
     frameShell.appendChild(frame);
 
     shadowRoot.append(styleNode, fabButton, frameShell);
+
+    const applyFrameAppearance = (value) => {
+      root.dataset.appearance = resolveFrameAppearance(value);
+    };
+    const loadFrameAppearance = async () => {
+      try {
+        const { settings = {} } = await chrome.storage.sync.get("settings");
+        applyFrameAppearance(settings.appearance);
+      } catch {
+        applyFrameAppearance("system");
+      }
+    };
+    applyFrameAppearance("system");
+    loadFrameAppearance();
+    try {
+      chrome.storage?.onChanged?.addListener((changes, areaName) => {
+        if (areaName !== "sync" || !changes.settings) return;
+        applyFrameAppearance(changes.settings.newValue?.appearance);
+      });
+    } catch {
+      // The iframe panel applies the saved appearance independently.
+    }
 
     const openPanel = () => {
       document.documentElement.style.setProperty("--alc-split-width", `${getSplitPanelWidth()}px`);
@@ -831,6 +911,21 @@ function installStandaloneSplitStyles() {
 function getSplitPanelWidth() {
   const width = Math.round(Math.min(500, Math.max(420, window.innerWidth * 0.34)));
   return window.innerWidth <= 900 ? Math.min(window.innerWidth, 460) : width;
+}
+
+function normalizeAppearance(value) {
+  if (value === "system" || value === "跟随系统") return "system";
+  if (value === "light" || value === "浅色") return "light";
+  if (value === "dark" || value === "深色") return "dark";
+  if (value === "sepia" || value === "护眼") return "sepia";
+  return "system";
+}
+
+function resolveFrameAppearance(value) {
+  const normalized = normalizeAppearance(value);
+  if (normalized !== "system") return normalized;
+  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
+  return "light";
 }
 
 function readEmbeddedPanelPaper() {

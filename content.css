@@ -2,15 +2,83 @@
   color-scheme: light;
   --alc-panel: #ffffff;
   --alc-surface: #f6f8f9;
+  --alc-header: #fbfcfd;
+  --alc-control: #ffffff;
+  --alc-bubble: #ffffff;
   --alc-text: #20242a;
   --alc-muted: #66707a;
   --alc-line: #d9e0e6;
   --alc-accent: #156f8f;
   --alc-accent-strong: #0f536b;
+  --alc-accent-soft: #eef7fa;
+  --alc-focus: rgba(21, 111, 143, 0.2);
   --alc-warn: #a33b20;
   --alc-user: #e9f6fa;
-  --alc-shadow: 0 22px 60px rgba(31, 35, 40, 0.22);
+  --alc-code: #eef0f2;
+  --alc-pre: #f2f4f6;
+  --alc-button-text: #ffffff;
+  --alc-fab-shadow: 0 12px 28px rgba(15, 83, 107, 0.26);
+  --alc-panel-shadow: -8px 0 24px rgba(31, 35, 40, 0.16);
+  --alc-bubble-shadow: 0 3px 10px rgba(32, 36, 42, 0.04);
+  --alc-spinner-track: rgba(21, 111, 143, 0.22);
+  --alc-quote-line: rgba(21, 111, 143, 0.35);
+  --alc-shortcut-border: rgba(21, 111, 143, 0.24);
+  --alc-user-border: rgba(21, 111, 143, 0.2);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+:host([data-appearance="dark"]) {
+  color-scheme: dark;
+  --alc-panel: #161a1f;
+  --alc-surface: #0f1317;
+  --alc-header: #171d23;
+  --alc-control: #20272f;
+  --alc-bubble: #1a2027;
+  --alc-text: #edf2f5;
+  --alc-muted: #a0aab3;
+  --alc-line: #303942;
+  --alc-accent: #59aecd;
+  --alc-accent-strong: #8bcfe4;
+  --alc-accent-soft: #173845;
+  --alc-focus: rgba(89, 174, 205, 0.3);
+  --alc-warn: #ff9b7e;
+  --alc-user: #133443;
+  --alc-code: #27303a;
+  --alc-pre: #151c23;
+  --alc-fab-shadow: 0 12px 28px rgba(6, 15, 21, 0.45);
+  --alc-panel-shadow: -8px 0 24px rgba(0, 0, 0, 0.32);
+  --alc-bubble-shadow: 0 3px 10px rgba(0, 0, 0, 0.16);
+  --alc-spinner-track: rgba(89, 174, 205, 0.24);
+  --alc-quote-line: rgba(89, 174, 205, 0.42);
+  --alc-shortcut-border: rgba(89, 174, 205, 0.3);
+  --alc-user-border: rgba(89, 174, 205, 0.26);
+}
+
+:host([data-appearance="sepia"]) {
+  color-scheme: light;
+  --alc-panel: #fffaf0;
+  --alc-surface: #f3ecd9;
+  --alc-header: #fbf2df;
+  --alc-control: #fffdf7;
+  --alc-bubble: #fffdf7;
+  --alc-text: #2b2720;
+  --alc-muted: #70685b;
+  --alc-line: #ded0b8;
+  --alc-accent: #3f7d7d;
+  --alc-accent-strong: #235d60;
+  --alc-accent-soft: #e6f0ec;
+  --alc-focus: rgba(63, 125, 125, 0.22);
+  --alc-warn: #a3482b;
+  --alc-user: #e7f2eb;
+  --alc-code: #eee4d0;
+  --alc-pre: #eadfc9;
+  --alc-fab-shadow: 0 12px 28px rgba(35, 93, 96, 0.22);
+  --alc-panel-shadow: -8px 0 24px rgba(70, 58, 42, 0.15);
+  --alc-bubble-shadow: 0 3px 10px rgba(70, 58, 42, 0.06);
+  --alc-spinner-track: rgba(63, 125, 125, 0.24);
+  --alc-quote-line: rgba(63, 125, 125, 0.38);
+  --alc-shortcut-border: rgba(63, 125, 125, 0.26);
+  --alc-user-border: rgba(63, 125, 125, 0.22);
 }
 
 * {
@@ -27,10 +95,10 @@
   border: 0;
   border-radius: 50%;
   background: var(--alc-accent);
-  color: #fff;
+  color: var(--alc-button-text);
   font-weight: 800;
   font-size: 15px;
-  box-shadow: 0 12px 28px rgba(15, 83, 107, 0.26);
+  box-shadow: var(--alc-fab-shadow);
   cursor: pointer;
 }
 
@@ -56,7 +124,7 @@
   border-radius: 0;
   background: var(--alc-panel);
   color: var(--alc-text);
-  box-shadow: -8px 0 24px rgba(31, 35, 40, 0.16);
+  box-shadow: var(--alc-panel-shadow);
   pointer-events: auto;
 }
 
@@ -83,7 +151,7 @@
   gap: 10px;
   padding: 12px 12px 9px;
   border-bottom: 1px solid var(--alc-line);
-  background: #fbfcfd;
+  background: var(--alc-header);
 }
 
 .alc-title-block {
@@ -131,7 +199,7 @@
   height: 30px;
   border: 1px solid var(--alc-line);
   border-radius: 6px;
-  background: #fff;
+  background: var(--alc-control);
   color: var(--alc-muted);
   padding: 0 8px;
   font-size: 12px;
@@ -181,7 +249,7 @@
   min-height: 28px;
   border: 1px solid var(--alc-line);
   border-radius: 999px;
-  background: #fff;
+  background: var(--alc-control);
   color: var(--alc-text);
   font: inherit;
   font-size: 11px;
@@ -195,8 +263,8 @@
 }
 
 .alc-shortcuts button {
-  border-color: rgba(21, 111, 143, 0.24);
-  background: #eef7fa;
+  border-color: var(--alc-shortcut-border);
+  background: var(--alc-accent-soft);
   color: var(--alc-accent-strong);
 }
 
@@ -276,14 +344,14 @@
   min-width: 0;
   border-radius: 8px;
   padding: 9px 11px;
-  background: #fff;
+  background: var(--alc-bubble);
   border: 1px solid var(--alc-line);
-  box-shadow: 0 3px 10px rgba(32, 36, 42, 0.04);
+  box-shadow: var(--alc-bubble-shadow);
 }
 
 .alc-message-user .alc-bubble {
   max-width: min(88%, 520px);
-  border-color: rgba(21, 111, 143, 0.2);
+  border-color: var(--alc-user-border);
   background: var(--alc-user);
 }
 
@@ -349,7 +417,7 @@
 .alc-message-body code {
   padding: 1px 4px;
   border-radius: 4px;
-  background: #eef0f2;
+  background: var(--alc-code);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 0.92em;
 }
@@ -360,7 +428,7 @@
   overflow-x: auto;
   border: 1px solid var(--alc-line);
   border-radius: 6px;
-  background: #f2f4f6;
+  background: var(--alc-pre);
   padding: 9px 10px;
 }
 
@@ -372,7 +440,7 @@
 
 .alc-message-body blockquote {
   margin: 8px 0;
-  border-left: 3px solid rgba(21, 111, 143, 0.35);
+  border-left: 3px solid var(--alc-quote-line);
   padding: 1px 0 1px 10px;
   color: var(--alc-muted);
 }
@@ -389,7 +457,7 @@
   width: 7px;
   height: 7px;
   margin-left: 7px;
-  border: 2px solid rgba(21, 111, 143, 0.22);
+  border: 2px solid var(--alc-spinner-track);
   border-top-color: var(--alc-accent);
   border-radius: 50%;
   animation: alc-spin 0.8s linear infinite;
@@ -403,7 +471,7 @@
   gap: 8px;
   padding: 9px 10px;
   border-top: 1px solid var(--alc-line);
-  background: #fff;
+  background: var(--alc-panel);
 }
 
 .alc-composer textarea {
@@ -414,6 +482,7 @@
   border: 1px solid var(--alc-line);
   border-radius: 8px;
   padding: 9px 10px;
+  background: var(--alc-control);
   color: var(--alc-text);
   font: inherit;
   font-size: 13px;
@@ -424,7 +493,7 @@
 }
 
 .alc-composer textarea:focus {
-  outline: 2px solid rgba(21, 111, 143, 0.2);
+  outline: 2px solid var(--alc-focus);
   border-color: var(--alc-accent);
 }
 
@@ -434,7 +503,7 @@
   border: 1px solid var(--alc-accent);
   border-radius: 8px;
   background: var(--alc-accent);
-  color: #fff;
+  color: var(--alc-button-text);
   font: inherit;
   font-size: 13px;
   font-weight: 800;
@@ -457,7 +526,7 @@ input:disabled {
   min-height: 26px;
   padding: 0 12px 8px;
   color: var(--alc-muted);
-  background: #fff;
+  background: var(--alc-panel);
   font-size: 11px;
   line-height: 1.35;
 }
@@ -472,7 +541,7 @@ input:disabled {
   width: 7px;
   height: 7px;
   margin-left: 7px;
-  border: 2px solid rgba(21, 111, 143, 0.22);
+  border: 2px solid var(--alc-spinner-track);
   border-top-color: var(--alc-accent);
   border-radius: 50%;
   animation: alc-spin 0.8s linear infinite;

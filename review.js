@@ -5,9 +5,19 @@ const exportButton = document.querySelector("#export");
 
 let notes = [];
 
+applyStoredAppearance();
 loadNotes();
 searchNode.addEventListener("input", render);
 exportButton.addEventListener("click", exportMarkdown);
+
+async function applyStoredAppearance() {
+  try {
+    const { settings = {} } = await chrome.storage.sync.get("settings");
+    document.body.dataset.appearance = resolveAppearance(settings.appearance);
+  } catch {
+    document.body.dataset.appearance = resolveAppearance("system");
+  }
+}
 
 async function loadNotes() {
   const { notes: noteMap = {}, conversations = {} } = await chrome.storage.local.get(["notes", "conversations"]);
@@ -233,6 +243,21 @@ function formatTokenCount(value) {
       : `${Math.round(tokens / 1000)}k`;
   }
   return `${(tokens / 1000000).toFixed(1).replace(/\.0$/, "")}M`;
+}
+
+function normalizeAppearance(value) {
+  if (value === "system" || value === "跟随系统") return "system";
+  if (value === "light" || value === "浅色") return "light";
+  if (value === "dark" || value === "深色") return "dark";
+  if (value === "sepia" || value === "护眼") return "sepia";
+  return "system";
+}
+
+function resolveAppearance(value) {
+  const normalized = normalizeAppearance(value);
+  if (normalized !== "system") return normalized;
+  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
+  return "light";
 }
 
 function escapeHtml(value) {

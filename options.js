@@ -56,6 +56,10 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+form.appearance.addEventListener("change", () => {
+  applyAppearance(form.appearance.value);
+});
+
 testButton.addEventListener("click", async () => {
   setStatus("正在测试当前模型...");
   try {
@@ -87,6 +91,8 @@ async function loadSettings() {
     profiles = normalizeProfiles(settings.modelProfiles, settings);
     activeProfileId = settings.activeProfileId || profiles[0]?.id || "";
     form.language.value = normalizeLanguage(settings.language);
+    form.appearance.value = normalizeAppearance(settings.appearance);
+    applyAppearance(form.appearance.value);
     renderProfiles();
   } catch (error) {
     setStatus(error.message || String(error), true);
@@ -98,6 +104,7 @@ async function saveCurrentSettings() {
   const next = {
     ...(settings || {}),
     language: normalizeLanguage(form.language.value),
+    appearance: normalizeAppearance(form.appearance.value),
     activeProfileId,
     modelProfiles: profiles
   };
@@ -367,6 +374,25 @@ function normalizeLanguage(value) {
   if (value === "zh-CN" || value === "中文" || value === "Chinese") return "zh-CN";
   if (value === "en" || value === "English") return "en";
   return "system";
+}
+
+function normalizeAppearance(value) {
+  if (value === "system" || value === "跟随系统") return "system";
+  if (value === "light" || value === "浅色") return "light";
+  if (value === "dark" || value === "深色") return "dark";
+  if (value === "sepia" || value === "护眼") return "sepia";
+  return "system";
+}
+
+function applyAppearance(value) {
+  document.body.dataset.appearance = resolveAppearance(value);
+}
+
+function resolveAppearance(value) {
+  const normalized = normalizeAppearance(value);
+  if (normalized !== "system") return normalized;
+  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
+  return "light";
 }
 
 function inferProvider(baseUrl) {

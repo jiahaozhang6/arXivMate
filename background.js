@@ -4,6 +4,7 @@ const DEFAULT_SETTINGS = {
   apiKey: "",
   model: "gpt-4o-mini",
   language: "system",
+  appearance: "system",
   temperature: 0.2,
   maxContextChars: 14000,
   useAr5iv: true
@@ -208,6 +209,7 @@ async function saveSettings(settings) {
     ...DEFAULT_SETTINGS,
     ...(settings || {}),
     language: normalizeLanguage(settings?.language),
+    appearance: normalizeAppearance(settings?.appearance),
     activeProfileId: activeProfile.id,
     modelProfiles,
     ...flattenProfile(activeProfile)
@@ -1229,6 +1231,7 @@ function normalizeSettings(settings) {
     ...DEFAULT_SETTINGS,
     ...(settings || {}),
     language: normalizeLanguage(settings?.language),
+    appearance: normalizeAppearance(settings?.appearance),
     activeProfileId: activeProfile.id,
     modelProfiles,
     ...flattenProfile(activeProfile)
@@ -1375,6 +1378,15 @@ function normalizeLanguage(value) {
   if (language === "en" || language === "English") return "en";
   if (language === "zh-CN" || language === "中文" || language === "Chinese") return "zh-CN";
   return DEFAULT_SETTINGS.language;
+}
+
+function normalizeAppearance(value) {
+  const appearance = normalizeString(value);
+  if (appearance === "system" || appearance === "跟随系统") return "system";
+  if (appearance === "light" || appearance === "浅色") return "light";
+  if (appearance === "dark" || appearance === "深色") return "dark";
+  if (appearance === "sepia" || appearance === "护眼") return "sepia";
+  return DEFAULT_SETTINGS.appearance;
 }
 
 function resolveOutputLanguageInstruction(language) {
