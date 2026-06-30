@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>arXivMate 设置</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div>
+          <p>arXivMate</p>
+          <h1>模型配置</h1>
+        </div>
+        <a href="review.html">打开复盘库</a>
+      </header>
+
+      <form id="settings-form" class="panel">
+        <section class="section-head">
+          <div>
+            <h2>模型 Profiles</h2>
+            <p>参考 llm-for-zotero 的配置方式：保留多个模型配置，按任务随时切换当前启用模型。</p>
+          </div>
+          <button type="button" id="add-profile">新增模型</button>
+        </section>
+
+        <div id="profiles"></div>
+
+        <label>
+          <span>输出语言</span>
+          <select name="language">
+            <option value="中文">中文</option>
+            <option value="English">English</option>
+            <option value="中英双语">中英双语</option>
+          </select>
+        </label>
+
+        <div class="actions">
+          <button type="submit">保存设置</button>
+          <button type="button" id="test-button">测试当前模型</button>
+        </div>
+
+        <p id="status" role="status"></p>
+      </form>
+
+      <section class="panel">
+        <h2>推荐用法</h2>
+        <ul>
+          <li>日常速览：选择便宜、速度快的模型，例如 DeepSeek flash 或 gpt-4o-mini。</li>
+          <li>深读全文：切到长上下文或质量更高的模型，再打开论文面板里的“全文”；DeepSeek/MiniMax 会使用 PDF 文本抽取上下文。</li>
+          <li>本地实验：保留一个 Ollama profile，不需要 API key。</li>
+        </ul>
+      </section>
+    </main>
+    <datalist id="model-presets">
+      <option value="gpt-4o-mini"></option>
+      <option value="deepseek-v4-flash"></option>
+      <option value="deepseek-v4-pro"></option>
+      <option value="MiniMax-M3"></option>
+      <option value="llama3.1"></option>
+    </datalist>
+    <script src="options.js"></script>
+  </body>
+</html>

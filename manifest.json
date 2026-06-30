@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "arXivMate",
+  "description": "A local-first Chrome extension for reading, chatting with, and reviewing arXiv papers using OpenAI-compatible LLMs.",
+  "version": "0.1.0",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_title": "arXivMate",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://arxiv.org/abs/*",
+        "https://www.arxiv.org/abs/*",
+        "https://arxiv.org/pdf/*",
+        "https://www.arxiv.org/pdf/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "content.css",
+        "content.js",
+        "panel.html",
+        "vendor/pdfjs/pdf.js",
+        "vendor/pdfjs/pdf.worker.js"
+      ],
+      "matches": [
+        "https://arxiv.org/*",
+        "https://www.arxiv.org/*"
+      ]
+    }
+  ]
+}
