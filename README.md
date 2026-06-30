@@ -12,7 +12,7 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 论文摘要
 
 ## 当前状态
 
-- 当前版本：`0.1.1`
+- 当前版本：`0.1.2`
 - 安装方式：Chrome 未打包扩展
 - Chrome Web Store：暂未发布
 - 主要语言：支持跟随系统、中文、英文；会同时影响扩展界面和 LLM 输出语言
@@ -292,7 +292,7 @@ It is not just a “summarize this paper” button. arXivMate is designed as a l
 
 ## Status
 
-- Version: `0.1.1`
+- Version: `0.1.2`
 - Installation: unpacked Chrome extension
 - Chrome Web Store: not published yet
 - Language: system default, Chinese, or English; controls both the extension UI and LLM output language
