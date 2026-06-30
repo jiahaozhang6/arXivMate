@@ -10,11 +10,14 @@
     <main>
       <h1>arXivMate</h1>
       <p id="status" data-i18n="popupStatusDefault">打开 arXiv 论文页后，右下角会出现 AI 按钮。</p>
+      <div id="update-banner" class="update-banner" hidden></div>
       <p id="update-status" class="update-status"></p>
+      <a id="download-update" class="download-update" target="_blank" rel="noreferrer" data-i18n="downloadLatestStable" hidden>下载最新稳定版</a>
       <button id="options" data-i18n="settings">设置</button>
       <button id="review" data-i18n="reviewLibraryShort">复盘库</button>
     </main>
     <script src="i18n.js"></script>
+    <script src="update-banner.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

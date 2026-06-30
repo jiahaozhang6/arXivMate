@@ -94,6 +94,66 @@ body[data-appearance="sepia"] {
   margin-bottom: 18px;
 }
 
+.update-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 12px;
+  box-shadow: var(--panel-shadow);
+}
+
+.update-banner[hidden] {
+  display: none;
+}
+
+.am-update-title {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--accent-strong);
+  font-size: 14px;
+}
+
+.am-update-text {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.am-update-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.am-update-download,
+.am-update-guide {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 0 12px;
+  background: var(--accent);
+  color: var(--button-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.am-update-guide {
+  background: var(--control);
+  color: var(--accent);
+}
+
 .hero p {
   margin: 0 0 4px;
   color: var(--accent-strong);

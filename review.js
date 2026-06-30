@@ -10,6 +10,7 @@ const statPapersNode = document.querySelector("#stat-papers");
 const statTurnsNode = document.querySelector("#stat-turns");
 const statSubjectsNode = document.querySelector("#stat-subjects");
 const statSavedNode = document.querySelector("#stat-saved");
+const updateBannerNode = document.querySelector("#update-banner");
 const I18N = window.ArxivMateI18n;
 
 let notes = [];
@@ -35,6 +36,7 @@ async function loadSettingsAndNotes() {
     document.body.dataset.appearance = resolveAppearance("system");
   }
   applyLanguage();
+  renderUpdateBanner();
   await loadNotes();
 }
 
@@ -46,6 +48,13 @@ function applyLanguage() {
   });
   document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => {
     node.placeholder = t(node.dataset.i18nPlaceholder);
+  });
+}
+
+function renderUpdateBanner() {
+  window.ArxivMateUpdateBanner?.checkAndRender({
+    container: updateBannerNode,
+    language: currentLanguage
   });
 }
 

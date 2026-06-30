@@ -66,6 +66,77 @@ p {
   display: block;
 }
 
+.update-banner {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--control);
+}
+
+.update-banner[hidden] {
+  display: none;
+}
+
+.am-update-title {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.am-update-text {
+  margin: 0;
+  font-size: 12px;
+}
+
+.am-update-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.am-update-download,
+.am-update-guide {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 0 10px;
+  background: var(--accent);
+  color: var(--button-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.am-update-guide {
+  background: var(--control);
+  color: var(--accent);
+}
+
+.download-update {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--control);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.download-update[hidden] {
+  display: none;
+}
+
 button {
   min-height: 36px;
   border: 1px solid var(--accent);

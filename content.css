@@ -293,10 +293,71 @@
   min-height: 0;
   overflow: hidden;
   background: var(--alc-surface);
+  display: flex;
+  flex-direction: column;
+}
+
+.alc-update-banner {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 7px;
+  margin: 8px 10px 0;
+  border: 1px solid var(--alc-accent);
+  border-radius: 8px;
+  background: var(--alc-panel);
+  padding: 9px;
+}
+
+.alc-update-banner[hidden] {
+  display: none;
+}
+
+.am-update-title {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--alc-accent-strong);
+  font-size: 12px;
+}
+
+.am-update-text {
+  margin: 0;
+  color: var(--alc-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.am-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.am-update-download,
+.am-update-guide {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--alc-accent);
+  border-radius: 6px;
+  padding: 0 9px;
+  background: var(--alc-accent);
+  color: var(--alc-button-text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.am-update-guide {
+  background: var(--alc-control);
+  color: var(--alc-accent);
 }
 
 .alc-chat {
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 12px 10px;

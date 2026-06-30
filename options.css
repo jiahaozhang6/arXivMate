@@ -100,6 +100,65 @@ body[data-appearance="sepia"] {
   box-shadow: var(--panel-shadow);
 }
 
+.update-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 0 16px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 12px;
+  box-shadow: var(--panel-shadow);
+}
+
+.update-banner[hidden] {
+  display: none;
+}
+
+.am-update-title {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--accent-strong);
+  font-size: 14px;
+}
+
+.am-update-text {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.am-update-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.am-update-download,
+.am-update-guide {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 0 12px;
+  background: var(--accent);
+  color: var(--button-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.am-update-guide {
+  background: var(--control);
+  color: var(--accent);
+}
+
 form {
   display: grid;
   gap: 18px;
@@ -121,6 +180,17 @@ form {
   margin-top: 6px;
   color: var(--muted);
   line-height: 1.45;
+}
+
+.add-profile-controls {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.add-profile-controls select {
+  width: 180px;
 }
 
 label {
@@ -211,6 +281,63 @@ label span,
   flex: 0 0 auto;
 }
 
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.button-link {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 0 12px;
+  background: var(--accent);
+  color: var(--button-text);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.button-link.secondary {
+  background: var(--control);
+  color: var(--accent);
+}
+
+.update-steps {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.update-steps strong {
+  margin: 12px 0 4px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.update-steps ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.update-steps pre {
+  overflow-x: auto;
+  margin: 6px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--control);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 input,
 select {
   width: 100%;
@@ -239,21 +366,81 @@ small {
   gap: 14px;
 }
 
-#profiles {
+.profile-manager {
   display: grid;
+  grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr);
   gap: 14px;
+  align-items: start;
 }
 
-.profile-card {
+.profile-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.profile-list-item {
+  min-height: 0;
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+}
+
+.profile-list-item.is-selected {
+  border-color: var(--accent);
+  background: var(--control);
+  box-shadow: 0 0 0 2px var(--focus);
+}
+
+.profile-list-title,
+.profile-list-meta {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-list-title {
+  font-weight: 800;
+}
+
+.profile-list-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.profile-list-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.profile-list-tags span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.profile-card,
+.profile-editor {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
   overflow: hidden;
 }
 
-.profile-header {
+.profile-editor-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   justify-content: space-between;
   padding: 12px 14px;
@@ -261,26 +448,44 @@ small {
   background: var(--panel);
 }
 
-.profile-header strong {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.active-choice {
-  display: inline-flex;
-  align-items: center;
-  grid-template-columns: none;
-  gap: 7px;
-  color: var(--accent-strong);
-  font-size: 13px;
+.profile-editor-header span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 12px;
   font-weight: 800;
 }
 
-.active-choice input {
-  width: auto;
+.profile-editor-header strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+}
+
+.profile-editor-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.profile-section {
+  padding: 14px;
+}
+
+.profile-section + .profile-section {
+  border-top: 1px solid var(--line);
+}
+
+.profile-section h3 {
+  margin: 0 0 12px;
+  color: var(--accent-strong);
+  font-size: 14px;
+  letter-spacing: 0;
 }
 
 .profile-grid {
@@ -288,6 +493,10 @@ small {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   padding: 14px;
+}
+
+.profile-section .profile-grid {
+  padding: 0;
 }
 
 .profile-advanced {
@@ -305,6 +514,16 @@ small {
 
 .profile-advanced .profile-grid {
   padding-top: 0;
+}
+
+.secret-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.secret-row button {
+  padding: 0 12px;
 }
 
 .checkbox {
@@ -339,6 +558,12 @@ button {
 button[type="button"] {
   background: var(--control);
   color: var(--accent);
+}
+
+button.danger {
+  border-color: var(--error);
+  background: var(--control);
+  color: var(--error);
 }
 
 button:hover {
@@ -378,9 +603,25 @@ ul {
   }
 
   .section-head,
-  .profile-header {
+  .profile-editor-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .add-profile-controls,
+  .profile-editor-actions,
+  .secret-row {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .add-profile-controls select {
+    width: 100%;
+  }
+
+  .profile-manager {
+    grid-template-columns: 1fr;
   }
 
   .profile-grid {
@@ -393,5 +634,11 @@ ul {
 
   .update-box {
     flex-direction: column;
+  }
+
+  .update-banner,
+  .am-update-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

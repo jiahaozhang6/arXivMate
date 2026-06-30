@@ -232,8 +232,11 @@ async function checkForUpdate({ force = false } = {}) {
   const now = Date.now();
   const { updateCheck } = await chrome.storage.local.get("updateCheck");
   if (!force && updateCheck?.checkedAt && now - updateCheck.checkedAt < UPDATE_CHECK_CACHE_TTL_MS) {
+    const latestTag = updateCheck.latestTag || versionToTag(updateCheck.latestVersion || localVersion);
     return {
       ...updateCheck,
+      latestTag,
+      latestZipUrl: updateCheck.latestZipUrl || buildTagZipUrl(latestTag),
       localVersion,
       updateAvailable: compareVersions(updateCheck.latestVersion, localVersion) > 0
     };
@@ -244,12 +247,13 @@ async function checkForUpdate({ force = false } = {}) {
     if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
     const tagFeed = await response.text();
     const latestTag = findLatestVersionTag(tagFeed);
-    if (!latestTag) throw new Error("GitHub has no semantic version tag.");
+    if (!latestTag) throw new Error("GitHub has no stable semantic version tag.");
     const latestVersion = tagToVersion(latestTag);
     const result = {
       localVersion,
       latestVersion,
       latestTag,
+      latestZipUrl: buildTagZipUrl(latestTag),
       updateAvailable: compareVersions(latestVersion, localVersion) > 0,
       checkedAt: new Date(now).toISOString(),
       sourceUrl: GITHUB_TAGS_PAGE_URL,
@@ -263,6 +267,7 @@ async function checkForUpdate({ force = false } = {}) {
       localVersion,
       latestVersion: updateCheck?.latestVersion || localVersion,
       latestTag: updateCheck?.latestTag || versionToTag(updateCheck?.latestVersion || localVersion),
+      latestZipUrl: updateCheck?.latestZipUrl || buildTagZipUrl(updateCheck?.latestTag || versionToTag(updateCheck?.latestVersion || localVersion)),
       updateAvailable: updateCheck?.latestVersion ? compareVersions(updateCheck.latestVersion, localVersion) > 0 : false,
       checkedAt: updateCheck?.checkedAt || "",
       sourceUrl: GITHUB_TAGS_PAGE_URL,
@@ -1544,15 +1549,20 @@ function tagToVersion(tag) {
   return normalizeVersion(tag);
 }
 
+function buildTagZipUrl(tag) {
+  const normalized = versionToTag(tag);
+  return normalized ? `https://github.com/jiahaozhang6/arXivMate/archive/refs/tags/${encodeURIComponent(normalized)}.zip` : "";
+}
+
 function findLatestVersionTag(tags) {
   const names = typeof tags === "string"
-    ? [...tags.matchAll(/<title>(v?\d+\.\d+\.\d+(?:[-+][^<]+)?)<\/title>/gi)].map((match) => match[1])
+    ? [...tags.matchAll(/<title>(v?\d+\.\d+\.\d+)<\/title>/gi)].map((match) => match[1])
     : Array.isArray(tags)
     ? tags.map((tag) => typeof tag === "string" ? tag : tag?.name)
     : [];
   return names
     .map((name) => normalizeString(name))
-    .filter((name) => /^v?\d+\.\d+\.\d+(?:[-+].*)?$/i.test(name))
+    .filter((name) => /^v?\d+\.\d+\.\d+$/i.test(name))
     .sort((left, right) => compareVersions(right, left))[0] || "";
 }
 

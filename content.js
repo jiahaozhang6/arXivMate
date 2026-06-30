@@ -71,6 +71,7 @@
       </div>
 
       <div class="alc-chat-shell">
+        <div class="alc-update-banner" hidden></div>
         <div class="alc-chat" role="log" aria-live="polite"></div>
       </div>
 
@@ -91,6 +92,7 @@
   const input = $(".alc-composer textarea");
   const status = $(".alc-status");
   const chat = $(".alc-chat");
+  const updateBanner = $(".alc-update-banner");
   const fullTextToggle = $(".alc-fulltext");
 
   applyLanguage(currentLanguage);
@@ -432,10 +434,12 @@
       activeModelLabel = settings.model ? ` · ${settings.model}` : "";
       applyLanguage(settings.language);
       applyAppearance(settings.appearance);
+      renderUpdateBanner();
     } catch {
       activeModelLabel = "";
       applyLanguage("system");
       applyAppearance("system");
+      renderUpdateBanner();
     }
     await loadConversation();
   }
@@ -447,6 +451,7 @@
         applyLanguage(changes.settings.newValue?.language);
         applyAppearance(changes.settings.newValue?.appearance);
         activeModelLabel = changes.settings.newValue?.model ? ` · ${changes.settings.newValue.model}` : "";
+        renderUpdateBanner();
       });
     } catch {
       // Storage listeners are optional; initial settings still cover normal page loads.
@@ -499,6 +504,14 @@
 
   function t(key, vars = {}) {
     return I18N.t(currentLanguage, key, vars);
+  }
+
+  function renderUpdateBanner() {
+    window.ArxivMateUpdateBanner?.checkAndRender({
+      container: updateBanner,
+      language: currentLanguage,
+      compact: true
+    });
   }
 
   async function loadConversation() {

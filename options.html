@@ -16,13 +16,18 @@
         <a href="review.html" data-i18n="openReview">打开复盘库</a>
       </header>
 
+      <div id="global-update-banner" class="update-banner" hidden></div>
+
       <form id="settings-form" class="panel">
         <section class="section-head">
           <div>
             <h2>模型 Profiles</h2>
             <p>参考 llm-for-zotero 的配置方式：保留多个模型配置，按任务随时切换当前启用模型。</p>
           </div>
-          <button type="button" id="add-profile">新增模型</button>
+          <div class="add-profile-controls">
+            <select id="add-profile-provider" aria-label="Profile provider"></select>
+            <button type="button" id="add-profile">新增模型</button>
+          </div>
         </section>
 
         <div id="profiles"></div>
@@ -77,7 +82,7 @@
           </div>
           <div>
             <dt data-i18n="version">版本</dt>
-            <dd id="project-version">0.1.4</dd>
+            <dd id="project-version">0.1.5</dd>
           </div>
           <div>
             <dt data-i18n="license">许可证</dt>
@@ -89,6 +94,11 @@
             <strong data-i18n="updateStatus">更新状态</strong>
             <p id="update-status"></p>
             <small id="update-checked-at"></small>
+            <div id="update-actions" class="update-actions" hidden>
+              <a id="download-update" class="button-link" target="_blank" rel="noreferrer" data-i18n="downloadStableVersion">下载稳定版</a>
+              <a id="open-tags" class="button-link secondary" target="_blank" rel="noreferrer" data-i18n="openTagsPage">打开 Tags</a>
+            </div>
+            <div id="update-steps" class="update-steps" hidden></div>
           </div>
           <button type="button" id="check-update" data-i18n="checkUpdate">检查更新</button>
         </div>
@@ -102,6 +112,7 @@
       <option value="llama3.1"></option>
     </datalist>
     <script src="i18n.js"></script>
+    <script src="update-banner.js"></script>
     <script src="options.js"></script>
   </body>
 </html>

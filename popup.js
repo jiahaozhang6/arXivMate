@@ -1,6 +1,8 @@
 const I18N = window.ArxivMateI18n;
 const statusNode = document.querySelector("#status");
 const updateStatusNode = document.querySelector("#update-status");
+const downloadUpdateLink = document.querySelector("#download-update");
+const updateBannerNode = document.querySelector("#update-banner");
 let currentLanguage = "system";
 
 initPopup();
@@ -24,7 +26,7 @@ async function initPopup() {
   }
   applyLanguage();
   updateTabStatus();
-  checkForUpdate();
+  renderUpdateBanner();
 }
 
 function applyLanguage() {
@@ -42,18 +44,15 @@ function updateTabStatus() {
   });
 }
 
-async function checkForUpdate() {
-  try {
-    const response = await sendMessage({ type: "checkForUpdate", force: false });
-    if (!response?.updateAvailable) return;
-    updateStatusNode.textContent = t("updateAvailable", {
-      local: response.localVersion,
-      latest: response.latestVersion
-    });
-    updateStatusNode.classList.add("is-visible");
-  } catch {
-    updateStatusNode.classList.remove("is-visible");
-  }
+function renderUpdateBanner() {
+  updateStatusNode.classList.remove("is-visible");
+  downloadUpdateLink.hidden = true;
+  downloadUpdateLink.removeAttribute("href");
+  window.ArxivMateUpdateBanner?.checkAndRender({
+    container: updateBannerNode,
+    language: currentLanguage,
+    compact: true
+  });
 }
 
 function sendMessage(payload) {

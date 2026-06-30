@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.5 - 2026-06-30
+
+Stable update prompts.
+
+- Add a latest stable tag ZIP download button to the popup and settings update prompts.
+- Show two update methods when a new version is available: `git pull` for cloned installs, or stable ZIP download for regular users.
+- Show update reminders across the popup, settings page, review library, arXiv assistant panel, and PDF iframe panel.
+- Redesign model profile management with a profile list, focused editor, provider presets, duplicate, delete, set-active, and API key visibility controls.
+- Restrict update checks to stable `vX.Y.Z` tags and ignore prerelease-style tags.
+- Document the updated two-path upgrade workflow in both Chinese and English README sections.
+
 ## 0.1.4 - 2026-06-30
 
 Stable tag installation guidance.

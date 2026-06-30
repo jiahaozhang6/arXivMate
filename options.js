@@ -2,11 +2,17 @@ const form = document.querySelector("#settings-form");
 const statusNode = document.querySelector("#status");
 const testButton = document.querySelector("#test-button");
 const addProfileButton = document.querySelector("#add-profile");
+const addProfileProviderSelect = document.querySelector("#add-profile-provider");
 const profilesNode = document.querySelector("#profiles");
 const updateBox = document.querySelector(".update-box");
 const updateStatusNode = document.querySelector("#update-status");
 const updateCheckedAtNode = document.querySelector("#update-checked-at");
 const checkUpdateButton = document.querySelector("#check-update");
+const updateActionsNode = document.querySelector("#update-actions");
+const updateStepsNode = document.querySelector("#update-steps");
+const downloadUpdateLink = document.querySelector("#download-update");
+const openTagsLink = document.querySelector("#open-tags");
+const globalUpdateBannerNode = document.querySelector("#global-update-banner");
 const projectVersionNode = document.querySelector("#project-version");
 const I18N = window.ArxivMateI18n;
 
@@ -27,12 +33,16 @@ const PROVIDER_PRESETS = {
     model: "MiniMax-M3"
   },
   ollama: {
-    label: "Ollama 本地",
+    label: "Ollama local",
+    labelZh: "Ollama 本地",
+    labelEn: "Ollama local",
     baseUrl: "http://localhost:11434/v1",
     model: "llama3.1"
   },
   custom: {
-    label: "自定义 OpenAI-compatible",
+    label: "Custom OpenAI-compatible",
+    labelZh: "自定义 OpenAI-compatible",
+    labelEn: "Custom OpenAI-compatible",
     baseUrl: "",
     model: ""
   }
@@ -41,15 +51,20 @@ const PROVIDER_PRESETS = {
 let settings = null;
 let profiles = [];
 let activeProfileId = "";
+let selectedProfileId = "";
+let revealApiKey = false;
 let currentLanguage = "system";
 
 syncProjectVersion();
+renderAddProfileProviderOptions();
 loadSettings();
 
 addProfileButton.addEventListener("click", () => {
-  const profile = createProfile("custom");
+  const profile = createProfile(addProfileProviderSelect.value || "custom");
   profiles.push(profile);
+  selectedProfileId = profile.id;
   activeProfileId = profile.id;
+  revealApiKey = false;
   renderProfiles();
 });
 
@@ -108,6 +123,7 @@ async function loadSettings() {
     settings = await sendMessage({ type: "getSettings" });
     profiles = normalizeProfiles(settings.modelProfiles, settings);
     activeProfileId = settings.activeProfileId || profiles[0]?.id || "";
+    selectedProfileId = activeProfileId || profiles[0]?.id || "";
     form.language.value = normalizeLanguage(settings.language);
     currentLanguage = form.language.value;
     form.appearance.value = normalizeAppearance(settings.appearance);
@@ -121,7 +137,7 @@ async function loadSettings() {
 }
 
 async function saveCurrentSettings() {
-  readProfilesFromDom();
+  readSelectedProfileFromDom();
   const next = {
     ...(settings || {}),
     language: normalizeLanguage(form.language.value),
@@ -140,18 +156,62 @@ function renderProfiles() {
   if (!profiles.some((profile) => profile.id === activeProfileId)) {
     activeProfileId = profiles[0].id;
   }
+  if (!profiles.some((profile) => profile.id === selectedProfileId)) {
+    selectedProfileId = activeProfileId || profiles[0].id;
+  }
 
-  profilesNode.innerHTML = profiles.map((profile, index) => `
-    <article class="profile-card" data-id="${escapeAttr(profile.id)}">
-      <header class="profile-header">
-        <label class="active-choice">
-          <input type="radio" name="activeProfile" value="${escapeAttr(profile.id)}" ${profile.id === activeProfileId ? "checked" : ""}>
-          <span>${escapeHtml(t("currentEnabled"))}</span>
-        </label>
-        <strong>${escapeHtml(profile.name || `模型 ${index + 1}`)}</strong>
-        <button type="button" data-action="remove" ${profiles.length <= 1 ? "disabled" : ""}>${escapeHtml(t("remove"))}</button>
-      </header>
+  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) || profiles[0];
+  profilesNode.innerHTML = `
+    <div class="profile-manager">
+      <aside class="profile-list" aria-label="${escapeAttr(t("profileList"))}">
+        ${profiles.map((profile) => renderProfileListItem(profile)).join("")}
+      </aside>
+      <article class="profile-editor profile-card" data-id="${escapeAttr(selectedProfile.id)}">
+        ${renderProfileEditor(selectedProfile)}
+      </article>
+    </div>
+  `;
 
+  profilesNode.querySelectorAll("[data-action]").forEach((node) => {
+    node.addEventListener("click", handleProfileAction);
+  });
+  profilesNode.querySelectorAll(".profile-editor input, .profile-editor select").forEach((node) => {
+    node.addEventListener("input", handleProfileInput);
+    node.addEventListener("change", handleProfileInput);
+  });
+}
+
+function renderProfileListItem(profile) {
+  const isSelected = profile.id === selectedProfileId;
+  const isActive = profile.id === activeProfileId;
+  return `
+    <button class="profile-list-item ${isSelected ? "is-selected" : ""}" type="button" data-action="select" data-id="${escapeAttr(profile.id)}">
+      <span class="profile-list-title">${escapeHtml(profile.name || profile.model || t("untitledProfile"))}</span>
+      <span class="profile-list-meta">${escapeHtml(profile.model || t("modelName"))}</span>
+      <span class="profile-list-tags">
+        <span>${escapeHtml(providerDisplayName(profile.provider))}</span>
+        ${isActive ? `<span>${escapeHtml(t("currentEnabled"))}</span>` : ""}
+      </span>
+    </button>
+  `;
+}
+
+function renderProfileEditor(profile) {
+  return `
+    <header class="profile-editor-header">
+      <div>
+        <span>${escapeHtml(t("editingProfile"))}</span>
+        <strong>${escapeHtml(profile.name || profile.model || t("untitledProfile"))}</strong>
+      </div>
+      <div class="profile-editor-actions">
+        <button type="button" data-action="set-active" ${profile.id === activeProfileId ? "disabled" : ""}>${escapeHtml(t("setActiveProfile"))}</button>
+        <button type="button" data-action="duplicate">${escapeHtml(t("duplicateProfile"))}</button>
+        <button type="button" class="danger" data-action="remove" ${profiles.length <= 1 ? "disabled" : ""}>${escapeHtml(t("remove"))}</button>
+      </div>
+    </header>
+
+    <section class="profile-section">
+      <h3>${escapeHtml(t("connectionSettings"))}</h3>
       <div class="profile-grid">
         <label>
           <span>${escapeHtml(t("name"))}</span>
@@ -161,7 +221,7 @@ function renderProfiles() {
           <span>${escapeHtml(t("provider"))}</span>
           <select data-field="provider">
             ${Object.entries(PROVIDER_PRESETS).map(([key, preset]) => `
-              <option value="${key}" ${profile.provider === key ? "selected" : ""}>${escapeHtml(preset.label)}</option>
+              <option value="${key}" ${profile.provider === key ? "selected" : ""}>${escapeHtml(providerDisplayName(key))}</option>
             `).join("")}
           </select>
         </label>
@@ -171,17 +231,21 @@ function renderProfiles() {
         </label>
         <label>
           <span>API Key</span>
-          <input data-field="apiKey" type="password" autocomplete="off" value="${escapeAttr(profile.apiKey)}" placeholder="sk-...">
+          <div class="secret-row">
+            <input data-field="apiKey" type="${revealApiKey ? "text" : "password"}" autocomplete="off" value="${escapeAttr(profile.apiKey)}" placeholder="sk-...">
+            <button type="button" data-action="toggle-secret">${escapeHtml(revealApiKey ? t("hideApiKey") : t("showApiKey"))}</button>
+          </div>
         </label>
         <label>
           <span>${escapeHtml(t("modelName"))}</span>
           <input data-field="model" list="model-presets" value="${escapeAttr(profile.model)}" placeholder="gpt-4o-mini">
         </label>
       </div>
+    </section>
 
-      <details class="profile-advanced">
-        <summary>${escapeHtml(t("advanced"))}</summary>
-        <div class="profile-grid">
+    <section class="profile-section">
+      <h3>${escapeHtml(t("generationSettings"))}</h3>
+      <div class="profile-grid">
         <label>
           <span>Temperature</span>
           <input data-field="temperature" type="number" min="0" max="2" step="0.1" value="${escapeAttr(profile.temperature)}">
@@ -190,6 +254,12 @@ function renderProfiles() {
           <span>${escapeHtml(t("outputTokens"))}</span>
           <input data-field="maxOutputTokens" type="number" min="128" max="64000" step="1" value="${escapeAttr(profile.maxOutputTokens)}">
         </label>
+      </div>
+    </section>
+
+    <details class="profile-advanced" open>
+      <summary>${escapeHtml(t("advanced"))}</summary>
+      <div class="profile-grid">
         <label>
           <span>${escapeHtml(t("contextWindowTokens"))}</span>
           <input data-field="inputTokenCap" type="number" min="1000" max="1000000" step="1000" value="${escapeAttr(profile.inputTokenCap)}">
@@ -218,30 +288,16 @@ function renderProfiles() {
           <input data-field="useAr5iv" type="checkbox" ${profile.useAr5iv ? "checked" : ""}>
           <span>${escapeHtml(t("allowAr5iv"))}</span>
         </label>
-        </div>
-      </details>
-    </article>
-  `).join("");
-
-  profilesNode.querySelectorAll("input, select").forEach((node) => {
-    node.addEventListener("input", handleProfileInput);
-    node.addEventListener("change", handleProfileInput);
-  });
-  profilesNode.querySelectorAll("[data-action='remove']").forEach((button) => {
-    button.addEventListener("click", handleRemoveProfile);
-  });
+      </div>
+    </details>
+  `;
 }
 
 function handleProfileInput(event) {
-  const card = event.target.closest(".profile-card");
+  const card = event.target.closest(".profile-editor");
   if (!card) return;
   const profile = profiles.find((item) => item.id === card.dataset.id);
   if (!profile) return;
-
-  if (event.target.name === "activeProfile") {
-    activeProfileId = event.target.value;
-    return;
-  }
 
   const field = event.target.dataset.field;
   if (!field) return;
@@ -249,14 +305,15 @@ function handleProfileInput(event) {
   if (field === "provider") {
     const nextProvider = event.target.value;
     const preset = PROVIDER_PRESETS[nextProvider] || PROVIDER_PRESETS.custom;
-    const oldPresetLabel = PROVIDER_PRESETS[profile.provider]?.label;
+    const oldPresetNames = providerDisplayNames(profile.provider);
     profile.provider = nextProvider;
     profile.baseUrl = preset.baseUrl;
     profile.model = preset.model;
     if (nextProvider === "ollama") profile.apiKey = "";
-    if (!profile.name || profile.name === oldPresetLabel || Object.values(PROVIDER_PRESETS).some((presetItem) => profile.name === presetItem.label)) {
-      profile.name = preset.label;
+    if (!profile.name || oldPresetNames.includes(profile.name) || Object.keys(PROVIDER_PRESETS).some((provider) => providerDisplayNames(provider).includes(profile.name))) {
+      profile.name = providerDisplayName(nextProvider);
     }
+    revealApiKey = false;
     renderProfiles();
     return;
   }
@@ -280,43 +337,83 @@ function handleProfileInput(event) {
   }
 }
 
-function handleRemoveProfile(event) {
-  const card = event.target.closest(".profile-card");
-  if (!card || profiles.length <= 1) return;
-  const id = card.dataset.id;
-  profiles = profiles.filter((profile) => profile.id !== id);
-  if (activeProfileId === id) activeProfileId = profiles[0]?.id || "";
-  renderProfiles();
+function handleProfileAction(event) {
+  const action = event.currentTarget.dataset.action;
+  const id = event.currentTarget.dataset.id || event.currentTarget.closest(".profile-editor")?.dataset.id;
+  if (action === "select") {
+    readSelectedProfileFromDom();
+    selectedProfileId = id;
+    revealApiKey = false;
+    renderProfiles();
+    return;
+  }
+  const profile = profiles.find((item) => item.id === id);
+  if (!profile) return;
+
+  if (action === "set-active") {
+    readSelectedProfileFromDom();
+    activeProfileId = id;
+    renderProfiles();
+    return;
+  }
+
+  if (action === "duplicate") {
+    readSelectedProfileFromDom();
+    const duplicate = {
+      ...profile,
+      id: createId(),
+      name: t("profileCopyName", { name: profile.name || profile.model || t("untitledProfile") })
+    };
+    profiles.push(duplicate);
+    selectedProfileId = duplicate.id;
+    activeProfileId = duplicate.id;
+    revealApiKey = false;
+    renderProfiles();
+    return;
+  }
+
+  if (action === "toggle-secret") {
+    readSelectedProfileFromDom();
+    revealApiKey = !revealApiKey;
+    renderProfiles();
+    return;
+  }
+
+  if (action === "remove") {
+    if (profiles.length <= 1) return;
+    if (!confirm(t("confirmRemoveProfile", { name: profile.name || profile.model || t("untitledProfile") }))) return;
+    profiles = profiles.filter((item) => item.id !== id);
+    if (activeProfileId === id) activeProfileId = profiles[0]?.id || "";
+    if (selectedProfileId === id) selectedProfileId = activeProfileId || profiles[0]?.id || "";
+    revealApiKey = false;
+    renderProfiles();
+  }
 }
 
-function readProfilesFromDom() {
-  const cards = [...profilesNode.querySelectorAll(".profile-card")];
-  profiles = cards.map((card) => {
-    const id = card.dataset.id;
-    const previous = profiles.find((profile) => profile.id === id) || createProfile("custom");
-    const get = (field) => card.querySelector(`[data-field="${field}"]`);
-    const baseUrl = get("baseUrl").value;
-    const inferredProvider = inferProvider(baseUrl);
-    return {
-      ...previous,
-      id,
-      name: get("name").value,
-      provider: inferredProvider !== "custom" ? inferredProvider : get("provider").value,
-      baseUrl,
-      apiKey: get("apiKey").value,
-      model: get("model").value,
-      temperature: Number(get("temperature").value),
-      maxOutputTokens: Number(get("maxOutputTokens").value),
-      inputTokenCap: Number(get("inputTokenCap").value),
-      maxContextChars: Number(get("maxContextChars").value),
-      historyTurns: Number(get("historyTurns").value),
-      historyMessageChars: Number(get("historyMessageChars").value),
-      defaultContextMode: get("defaultContextMode").value,
-      useAr5iv: get("useAr5iv").checked
-    };
+function readSelectedProfileFromDom() {
+  const card = profilesNode.querySelector(".profile-editor");
+  if (!card) return;
+  const profile = profiles.find((item) => item.id === card.dataset.id);
+  if (!profile) return;
+  const get = (field) => card.querySelector(`[data-field="${field}"]`);
+  const baseUrl = get("baseUrl")?.value || "";
+  const selectedProvider = get("provider")?.value || profile.provider;
+  const inferredProvider = inferProvider(baseUrl);
+  Object.assign(profile, {
+    name: get("name")?.value || "",
+    provider: inferredProvider !== "custom" ? inferredProvider : selectedProvider,
+    baseUrl,
+    apiKey: get("apiKey")?.value || "",
+    model: get("model")?.value || "",
+    temperature: Number(get("temperature")?.value),
+    maxOutputTokens: Number(get("maxOutputTokens")?.value),
+    inputTokenCap: Number(get("inputTokenCap")?.value),
+    maxContextChars: Number(get("maxContextChars")?.value),
+    historyTurns: Number(get("historyTurns")?.value),
+    historyMessageChars: Number(get("historyMessageChars")?.value),
+    defaultContextMode: get("defaultContextMode")?.value || "fast",
+    useAr5iv: Boolean(get("useAr5iv")?.checked)
   });
-  const checked = profilesNode.querySelector("input[name='activeProfile']:checked");
-  if (checked) activeProfileId = checked.value;
 }
 
 function normalizeProfiles(value, fallbackSettings) {
@@ -365,7 +462,7 @@ function createProfile(provider) {
   const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
   return {
     id: createId(),
-    name: preset.label,
+    name: providerDisplayName(provider),
     provider,
     baseUrl: preset.baseUrl,
     apiKey: "",
@@ -379,6 +476,26 @@ function createProfile(provider) {
     defaultContextMode: "fast",
     useAr5iv: true
   };
+}
+
+function renderAddProfileProviderOptions() {
+  if (!addProfileProviderSelect) return;
+  addProfileProviderSelect.innerHTML = Object.entries(PROVIDER_PRESETS).map(([key, preset]) => `
+    <option value="${key}">${escapeHtml(providerDisplayName(key))}</option>
+  `).join("");
+  addProfileProviderSelect.value = "custom";
+}
+
+function providerDisplayName(provider) {
+  const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
+  return I18N.resolveLanguage(currentLanguage) === "zh-CN"
+    ? preset.labelZh || preset.label
+    : preset.labelEn || preset.label;
+}
+
+function providerDisplayNames(provider) {
+  const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
+  return [...new Set([preset.label, preset.labelZh, preset.labelEn].filter(Boolean))];
 }
 
 function inferInputTokenCap(model) {
@@ -425,7 +542,23 @@ function applyLanguage(value) {
   document.querySelector(".section-head h2").textContent = t("modelProfiles");
   document.querySelector(".section-head p").textContent = t("profilesHelp");
   addProfileButton.textContent = t("addProfile");
+  renderAddProfileProviderOptions();
   checkUpdateButton.textContent = t("checkUpdate");
+}
+
+function renderGlobalUpdateBanner(result) {
+  if (result) {
+    window.ArxivMateUpdateBanner?.renderResult({
+      container: globalUpdateBannerNode,
+      result,
+      language: currentLanguage
+    });
+    return;
+  }
+  window.ArxivMateUpdateBanner?.checkAndRender({
+    container: globalUpdateBannerNode,
+    language: currentLanguage
+  });
 }
 
 function t(key, vars = {}) {
@@ -441,6 +574,7 @@ async function checkForUpdate(force) {
   updateBox.classList.remove("is-update", "is-error");
   updateStatusNode.textContent = t("checkingUpdate");
   updateCheckedAtNode.textContent = "";
+  renderUpdateActions(null);
   checkUpdateButton.disabled = true;
   try {
     const result = await sendMessage({ type: "checkForUpdate", force });
@@ -468,8 +602,42 @@ function renderUpdateStatus(result) {
   const checkedAt = formatUpdateTime(result?.checkedAt);
   updateCheckedAtNode.textContent = [
     checkedAt ? t("updateCheckedAt", { time: checkedAt }) : "",
-    result?.updateAvailable ? t("updateCommands") : ""
+    result?.updateAvailable ? t("updateMethodsHint") : ""
   ].filter(Boolean).join(" ");
+  renderGlobalUpdateBanner(result);
+  renderUpdateActions(result);
+}
+
+function renderUpdateActions(result) {
+  const show = Boolean(result?.updateAvailable && result.latestTag && result.latestZipUrl);
+  updateActionsNode.hidden = !show;
+  updateStepsNode.hidden = !show;
+  if (!show) {
+    downloadUpdateLink.removeAttribute("href");
+    openTagsLink.removeAttribute("href");
+    updateStepsNode.innerHTML = "";
+    return;
+  }
+
+  downloadUpdateLink.href = result.latestZipUrl;
+  openTagsLink.href = result.sourceUrl || "https://github.com/jiahaozhang6/arXivMate/tags";
+  updateStepsNode.innerHTML = `
+    <strong>${escapeHtml(t("gitUpgradeTitle"))}</strong>
+    <ol>
+      <li>${escapeHtml(t("gitUpgradeStep1"))}</li>
+      <li>${escapeHtml(t("gitUpgradeStep2"))}</li>
+      <li>${escapeHtml(t("gitUpgradeStep3"))}</li>
+    </ol>
+    <pre><code>cd arXivMate
+git pull</code></pre>
+    <strong>${escapeHtml(t("zipUpgradeTitle"))}</strong>
+    <ol>
+      <li>${escapeHtml(t("zipUpgradeStep1", { tag: result.latestTag }))}</li>
+      <li>${escapeHtml(t("zipUpgradeStep2"))}</li>
+      <li>${escapeHtml(t("zipUpgradeStep3"))}</li>
+      <li>${escapeHtml(t("zipUpgradeStep4"))}</li>
+    </ol>
+  `;
 }
 
 function formatUpdateTime(value) {
