@@ -1,199 +1,207 @@
 # arXivMate
 
-arXivMate is a local-first Chrome MV3 extension for reading arXiv papers with an LLM. It adds a split-screen paper assistant to arXiv abstract and PDF pages, supports per-paper chat history, extracts PDF text locally with PDF.js, and keeps a searchable review library for daily research reading.
+> 在 arXiv 页面里直接和论文对话，把每日读论文变成可追踪、可复盘的工作流。
 
-The project is inspired by the model-profile, context-window, PDF-capability, and paper-chat ideas in [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero), adapted for a lightweight browser extension workflow.
+arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 论文摘要页或 PDF 页时，它会在右侧打开一个分屏阅读助手，帮助你快速总结论文、深读方法与实验、生成学习卡片，并把每篇论文的对话历史保存在本地。
 
-## Features
+它不是简单的“摘要按钮”。arXivMate 更像一个轻量研究阅读搭子：它理解当前论文、保留每篇论文的历史对话、支持 DeepSeek/MiniMax/OpenAI-compatible 接口，并参考 [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) 的模型配置、PDF 能力分层、上下文窗口和 paper chat 设计。
 
-- Split-screen assistant on arXiv `abs` and `pdf` pages.
-- Quick summary, deep reading, and study-card modes.
-- Per-paper chat with local history, keyed by arXiv ID.
-- Local PDF text extraction with PDF.js for full-text context.
-- Fallback to ar5iv HTML when PDF text extraction is unavailable.
-- Streaming Chat Completions when the provider supports it.
-- Multiple model profiles for OpenAI-compatible APIs.
-- Built-in presets for OpenAI, DeepSeek, MiniMax, Ollama, and custom endpoints.
-- Context-window budgeting with estimated usage display, for example `12k / 128k`.
-- Searchable local review library with Markdown export.
-- Local storage for notes, conversation history, and extracted text cache.
+## 当前状态
 
-## Screenshots
+- 当前版本：`0.1.0`
+- 安装方式：Chrome 未打包扩展
+- Chrome Web Store：暂未发布
+- 主要语言：中文界面，支持中文/英文/中英双语输出
+- 适合用户：每天看 arXiv、需要快速判断论文价值、希望保留阅读对话历史的研究者和工程师
 
-Screenshots are not committed yet. Suggested captures before publishing:
+## 功能亮点
 
-- arXiv abstract page with arXivMate split screen open.
-- arXiv PDF page with chat input focused.
-- Model profile settings page.
-- Review library with a saved paper conversation.
+- **右侧分屏阅读**：打开助手时页面自动让出右侧空间，关闭后恢复原页面。
+- **arXiv abs/PDF 双页面支持**：摘要页和 PDF 页都能使用；PDF 页通过 iframe 面板避免 Chrome PDF viewer 抢键盘焦点。
+- **三种阅读模式**：
+  - `速览`：用摘要和元数据快速判断是否值得读。
+  - `深读`：优先读取 PDF 正文，分析问题、方法、实验、局限和后续研究点。
+  - `学习卡`：生成阅读路线、主动回忆题和 Anki 风格卡片。
+- **针对单篇论文连续对话**：每篇论文按 arXiv ID 保存独立对话历史。
+- **本地复盘库**：搜索读过的论文、查看历史对话、复制或导出 Markdown。
+- **PDF 文本抽取**：后台下载当前 arXiv PDF，用 PDF.js 抽取正文文本作为上下文。
+- **ar5iv fallback**：PDF 文本不可用时可回退到 ar5iv HTML 正文。
+- **多模型 Profile**：内置 OpenAI、DeepSeek、MiniMax、Ollama 和自定义 OpenAI-compatible 配置。
+- **流式输出**：优先使用 Chat Completions stream；不支持 stream 的接口会退回普通响应。
+- **上下文窗口预算**：估算并显示本次请求的上下文用量，如 `上下文 12k / 128k`。
+- **本地优先**：笔记、历史和正文缓存都保存在 Chrome 本地 storage。
 
-## Install
+## 截图
 
-This extension is currently loaded as an unpacked Chrome extension.
+截图还没有提交。建议后续补充：
 
-1. Clone this repository:
+- arXiv 摘要页右侧分屏助手
+- arXiv PDF 页输入框聚焦状态
+- 模型 Profile 设置页
+- 论文复盘库
+
+## 快速安装
+
+目前 arXivMate 通过 Chrome 的“加载已解压扩展程序”安装。
+
+1. 克隆仓库：
 
    ```bash
-   git clone https://github.com/<your-github-username>/arXivMate.git
+   git clone https://github.com/jiahaozhang6/arXivMate.git
    ```
 
-2. Open Chrome and go to `chrome://extensions`.
-3. Enable `Developer mode`.
-4. Click `Load unpacked`.
-5. Select the cloned `arXivMate` directory.
-6. Open the extension popup and configure a model profile.
+2. 打开 Chrome：`chrome://extensions`
+3. 打开右上角 `开发者模式`
+4. 点击 `加载已解压的扩展程序`
+5. 选择刚刚克隆下来的 `arXivMate` 目录
+6. 点击扩展图标，进入设置页，配置模型 Profile
 
-If you change the source code, click the extension reload button on `chrome://extensions`, then refresh the arXiv page.
+更新代码后，需要在 `chrome://extensions` 里点击 arXivMate 的刷新按钮，并刷新已经打开的 arXiv 页面。
 
-## Update
+## 保持更新
 
-If you installed arXivMate from a git clone, update it with:
+如果你是通过 git clone 安装的：
 
 ```bash
 cd arXivMate
 git pull
 ```
 
-Then open `chrome://extensions`, click the reload button on arXivMate, and refresh any open arXiv pages.
+然后：
 
-If you forked the repository and want to keep your fork synced with the upstream project:
+1. 打开 `chrome://extensions`
+2. 点击 arXivMate 卡片上的刷新按钮
+3. 刷新已经打开的 arXiv 页面
+
+如果你 fork 了本仓库，可以这样同步上游：
 
 ```bash
-git remote add upstream https://github.com/<upstream-owner>/arXivMate.git
+git remote add upstream https://github.com/jiahaozhang6/arXivMate.git
 git fetch upstream
 git merge upstream/main
 ```
 
-If your local branch is named `master`, use `upstream/master` instead of `upstream/main`.
+## 模型配置
 
-## Usage
+arXivMate 调用 OpenAI-compatible Chat Completions 接口。你可以创建多个 Profile，用不同模型处理不同任务。
 
-1. Open an arXiv paper, for example `https://arxiv.org/abs/1706.03762`.
-2. Click the `AI` button in the bottom-right corner.
-3. Use one of the reading modes:
-   - `速览`: fast metadata and abstract summary.
-   - `深读`: full-text-oriented analysis using PDF text extraction when available.
-   - `学习卡`: reading plan, recall questions, and Anki-style cards.
-4. Ask follow-up questions in the composer.
-5. Reopen the same paper later to continue from local history.
-6. Open `历史` to search saved notes and conversations.
-
-On desktop, arXivMate uses a right-side split-screen layout. Closing the assistant restores the page to the normal single-column view.
-
-## Model Profiles
-
-arXivMate calls OpenAI-compatible Chat Completions endpoints.
-
-| Provider | Default Base URL | Example model | Notes |
+| Provider | 默认 Base URL | 示例模型 | 说明 |
 | --- | --- | --- | --- |
-| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` | Uses standard Chat Completions. |
-| DeepSeek | `https://api.deepseek.com` | `deepseek-v4-flash` | Uses OpenAI-compatible chat format; thinking output is disabled/stripped where possible. |
-| MiniMax | `https://api.minimax.io/v1` | `MiniMax-M3` | Also recognizes `api.minimaxi.com`; thinking output is stripped where possible. |
-| Ollama | `http://localhost:11434/v1` | `llama3.1` | API key can be left empty for local setups. |
-| Custom | User-defined | User-defined | Any compatible Chat Completions gateway. |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` | 标准 Chat Completions。 |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-v4-flash` | OpenAI-compatible 格式；会尽量禁用/清理 thinking 输出。 |
+| MiniMax | `https://api.minimax.io/v1` | `MiniMax-M3` | 同时识别 `api.minimaxi.com`；会清理 thinking 输出。 |
+| Ollama | `http://localhost:11434/v1` | `llama3.1` | 本地模型通常不需要 API key。 |
+| Custom | 自定义 | 自定义 | 任意兼容 Chat Completions 的网关。 |
 
-Each profile stores:
+每个 Profile 可以配置：
 
-- Provider and API base URL.
-- API key.
-- Model name.
-- Temperature and output token limit.
-- Context window token cap.
-- Full-text character budget.
-- Number of recent chat turns to include.
-- Fallback behavior for ar5iv.
+- 供应商和 API Base URL
+- API Key
+- 模型名称
+- Temperature
+- 输出 token 上限
+- 上下文窗口 tokens
+- PDF/正文上下文字符数
+- 最近历史轮数
+- 单条历史消息字符上限
+- 是否允许 ar5iv fallback
 
-## Context Window
+### 推荐配置
 
-Most users do not need to edit the context window manually.
+- **日常速览**：DeepSeek flash、MiniMax-M3、gpt-4o-mini 等便宜快速模型。
+- **认真深读**：长上下文模型，并适当提高 `正文字符数`。
+- **本地实验**：Ollama + 本地模型，API Key 留空。
 
-arXivMate follows the `llm-for-zotero` style of treating `inputTokenCap` as the active model context window. The extension:
+## 使用方式
 
-- Infers a default context window from the model name.
-- Reserves output tokens before sending the prompt.
-- Uses a 90% soft limit for safety.
-- Drops older history first when the prompt is too large.
-- Trims paper full-text context when needed.
-- Displays and stores estimated context usage for each assistant turn.
+1. 打开任意 arXiv 论文，例如：
 
-For custom gateways or models with unusual limits, override `上下文窗口 tokens` in the profile's advanced settings.
+   ```text
+   https://arxiv.org/abs/1706.03762
+   ```
 
-## PDF Handling
+2. 点击页面右下角 `AI`
+3. 选择阅读模式：
+   - `速览`：快速看问题、方法、结果、贡献和局限。
+   - `深读`：分析方法主线、实验设计、失败场景和后续问题。
+   - `学习卡`：生成学习路线、主动回忆问题和卡片。
+4. 在底部输入框继续追问。
+5. 重新打开同一篇论文时，会自动载入该论文历史。
+6. 点击 `历史` 打开本地复盘库。
 
-arXivMate does not blindly upload PDF files to every OpenAI-compatible provider.
+默认情况下，普通追问和速览只使用摘要、元数据和最近历史；`深读`、`学习卡` 或打开 `全文` 后才会抽取 PDF/ar5iv 正文。
 
-Following the capability separation used by `llm-for-zotero`, the extension treats native PDF input as provider-specific. DeepSeek, MiniMax, Ollama, and generic OpenAI-compatible endpoints use extracted text as context by default:
+## PDF 处理策略
 
-1. Resolve the current arXiv PDF URL.
-2. Download the PDF in the extension background service worker.
-3. Extract text with bundled PDF.js.
-4. Cache the extracted text locally.
-5. Send only the selected text context, metadata, and recent chat history to the configured LLM.
-6. If PDF extraction fails and ar5iv is enabled, fetch ar5iv HTML text as a fallback.
+arXivMate 不会把 PDF 文件盲目上传给所有 OpenAI-compatible 接口。
 
-This is more reliable than pretending that all compatible chat endpoints accept binary PDF input.
+这部分参考了 `llm-for-zotero` 的能力分层思路：
 
-## Local Storage
+- 一方原生接口可能支持 native PDF 输入。
+- 某些供应商有单独的文件上传接口，需要专门适配。
+- OpenAI-compatible chat endpoint 不等于支持 PDF 文件输入。
 
-arXivMate stores data in Chrome extension storage:
+因此当前版本对 DeepSeek、MiniMax、Ollama 和自定义 OpenAI-compatible 接口默认使用更稳的文本路线：
 
-- `chrome.storage.sync.settings`: model profiles and active profile selection.
-- `chrome.storage.local.conversations`: per-paper chat history.
-- `chrome.storage.local.notes`: saved reading notes.
-- `chrome.storage.local.paperContextCache`: cached PDF/ar5iv text snippets.
+1. 识别当前 arXiv ID 和 PDF URL。
+2. 在 background service worker 中下载 PDF。
+3. 用内置 PDF.js 抽取页面文本。
+4. 将抽取文本缓存到本地。
+5. 把论文元数据、正文节选和最近对话历史发送给 LLM。
+6. 如果 PDF 抽取失败，并且开启了 ar5iv，则尝试读取 ar5iv HTML 正文。
 
-The review page merges saved notes and conversations so any paper you chatted with can be found later.
+状态栏中如果看到 `PDF 文本抽取（未上传 PDF 文件）`，表示当前使用的是文本上下文，不是二进制 PDF 上传。
 
-## Privacy
+## 上下文窗口
 
-arXivMate is local-first, but it still sends selected paper context to your configured LLM provider when you ask it to summarize or chat.
+一般不需要手动设置上下文窗口。
 
-Sent to the provider:
+arXivMate 参考 `llm-for-zotero` 的 input cap/context window 机制：
 
-- Paper metadata.
-- Abstract.
-- Extracted PDF/ar5iv text snippets when full-text mode is used.
-- Recent conversation history for the current paper.
-- Your current question.
+- 根据模型名推断默认上下文窗口。
+- 请求前预留输出 tokens。
+- 使用约 90% soft limit，降低超上下文失败概率。
+- 超出预算时优先丢弃较旧历史，再裁剪正文上下文。
+- 每次回答保存并显示估算用量，例如 `上下文 12k / 128k (9%)`。
 
-Stored locally:
+如果你使用自定义代理，或者模型实际窗口和自动识别不一致，可以在高级设置中调整 `上下文窗口 tokens`。
 
-- API configuration.
-- Conversation history.
-- Notes.
-- Extracted text cache.
+## 本地数据
 
-The extension currently requests `<all_urls>` host permission so custom LLM gateways can be used. If you only use a small set of providers, you can reduce `host_permissions` in `manifest.json`.
+arXivMate 使用 Chrome extension storage：
 
-## Project Structure
+- `chrome.storage.sync.settings`：模型 Profiles、当前启用模型、输出语言。
+- `chrome.storage.local.conversations`：按 arXiv ID 保存的论文对话。
+- `chrome.storage.local.notes`：手动保存的论文笔记。
+- `chrome.storage.local.paperContextCache`：PDF/ar5iv 正文节选缓存。
 
-```text
-.
-├── background.js        # settings, LLM requests, streaming, PDF extraction, storage
-├── content.js           # arXiv page assistant and split-screen UI
-├── content.css          # assistant UI styles
-├── options.html/js/css  # model profile settings
-├── popup.html/js/css    # extension popup
-├── review.html/js/css   # local review library
-├── panel.html           # iframe panel used on Chrome PDF viewer pages
-├── manifest.json        # Chrome MV3 manifest
-└── vendor/pdfjs/        # bundled PDF.js runtime
-```
+复盘库会合并 notes 和 conversations，所以只要和某篇论文聊过，就能在历史里找回。
 
-## Development
+## 隐私说明
 
-There is no build step at the moment. Edit the files directly and reload the unpacked extension.
+arXivMate 是本地优先，但当你点击总结、深读或发送问题时，会把必要上下文发送给你配置的 LLM API。
 
-Recommended git workflow:
+会发送：
 
-```bash
-git checkout -b my-change
-git status
-git add .
-git commit -m "Describe your change"
-```
+- 论文标题、作者、摘要、分类、arXiv ID 等元数据
+- 当前问题
+- 当前论文最近若干轮对话历史
+- 在全文模式下抽取到的 PDF/ar5iv 正文节选
 
-Basic checks:
+本地保存：
+
+- 模型配置和 API Key
+- 对话历史
+- 保存的笔记
+- 正文缓存
+
+当前 `manifest.json` 使用 `<all_urls>` host permission，是为了支持任意自定义 LLM 网关。如果你只想支持固定供应商，可以自行收窄 `host_permissions`。
+
+## 开发
+
+当前没有构建步骤，直接编辑源码并重新加载扩展即可。
+
+常用检查：
 
 ```bash
 node --check background.js
@@ -203,19 +211,55 @@ node --check review.js
 node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest ok')"
 ```
 
+项目结构：
+
+```text
+.
+├── background.js        # 设置、LLM 请求、stream、PDF 抽取、本地存储
+├── content.js           # arXiv 页面注入、分屏助手、聊天 UI
+├── content.css          # 分屏助手样式
+├── options.html/js/css  # 模型 Profile 设置页
+├── popup.html/js/css    # 扩展 popup
+├── review.html/js/css   # 本地复盘库
+├── panel.html           # PDF viewer 页面 iframe 面板
+├── manifest.json        # Chrome MV3 manifest
+└── vendor/pdfjs/        # 内置 PDF.js
+```
+
+建议开发流程：
+
+```bash
+git checkout -b my-change
+git status
+git add .
+git commit -m "Describe your change"
+git push
+```
+
+## 常见问题
+
+### 为什么 reload 扩展后页面报 `Extension context invalidated`？
+
+Chrome 重新加载扩展后，已经打开的页面里可能还残留旧的 content script。刷新当前 arXiv 页面即可。arXivMate 已经对大多数 runtime 调用做了防护，但开发期刷新页面仍然是最稳的做法。
+
+### 为什么不直接上传 PDF 给 DeepSeek 或 MiniMax？
+
+OpenAI-compatible chat endpoint 不一定支持二进制 PDF 输入。当前版本使用 PDF.js 抽取文本作为上下文，更稳定，也更容易控制隐私和上下文窗口。
+
+### 普通用户能自动更新吗？
+
+通过 Chrome Web Store 安装后可以自动更新。当前源码版通过 `git pull` 更新，然后在 `chrome://extensions` 里 reload 扩展。
+
 ## Roadmap
 
-- Add screenshots and demo GIFs.
-- Add export/import for settings and history.
-- Add optional provider-specific native PDF adapters where supported.
-- Add keyboard shortcuts for opening and focusing the assistant.
-- Add better token estimation for non-English text and multimodal content.
-- Add a test harness for PDF extraction and prompt budgeting.
+- 添加截图和 demo GIF。
+- 发布 Chrome Web Store 版本。
+- 添加设置/历史的导入导出。
+- 增加快捷键打开和聚焦助手。
+- 增加 provider-specific native PDF 适配。
+- 改进中文/混合文本 token 估算。
+- 增加 PDF 抽取和 prompt budget 的自动测试。
 
-## Name
-
-`arXivMate` means a small research-reading companion for arXiv. The goal is not just to summarize papers, but to help build a daily reading habit with context, history, and review.
-
-## License
+## 许可证
 
 MIT. See [LICENSE](./LICENSE).
