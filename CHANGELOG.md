@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.13 - 2026-06-30
+
+Model loading dropdown fix.
+
+- Add an explicit model picker next to the model-name input in settings.
+- Refresh the picker immediately after loading models from the provider `/models` endpoint.
+- Keep manual model input available while making loaded models selectable without relying on browser datalist behavior.
+
 ## 0.1.12 - 2026-06-30
 
 PDF, Markdown, and reading-layout release.

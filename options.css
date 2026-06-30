@@ -585,6 +585,14 @@ small {
   gap: 8px;
 }
 
+.model-combo {
+  grid-template-columns: minmax(0, 1.2fr) minmax(150px, 0.8fr) auto;
+}
+
+.model-combo select {
+  min-width: 0;
+}
+
 .secret-row button,
 .model-row button {
   padding: 0 12px;

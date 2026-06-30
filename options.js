@@ -109,7 +109,6 @@ let profiles = [];
 let selectedProfileId = "";
 let revealApiKey = false;
 let currentLanguage = "system";
-let loadedModelOptions = [];
 const modelLoadCache = new Map();
 const autoLoadedModelKeys = new Set();
 
@@ -221,6 +220,9 @@ function renderProfiles() {
   profilesNode.querySelectorAll('.profile-editor [data-field="model"]').forEach((node) => {
     node.addEventListener("focus", handleModelInputFocus);
   });
+  profilesNode.querySelectorAll(".profile-editor [data-model-picker]").forEach((node) => {
+    node.addEventListener("change", handleModelPickerChange);
+  });
   renderModelDatalist();
 }
 
@@ -288,8 +290,11 @@ function renderProfileEditor(profile) {
         </label>
         <label>
           <span>${escapeHtml(t("modelName"))}</span>
-          <div class="model-row">
+          <div class="model-row model-combo">
             <input data-field="model" list="model-presets" value="${escapeAttr(profile.model)}" placeholder="gpt-4o-mini">
+            <select data-model-picker aria-label="${escapeAttr(t("modelName"))}">
+              ${renderModelPickerOptions(profile)}
+            </select>
             <button type="button" data-action="load-models">${escapeHtml(t("loadModels"))}</button>
           </div>
           <small>${escapeHtml(t("loadModelsHelp"))}</small>
@@ -622,6 +627,20 @@ function handleModelInputFocus(event) {
   autoLoadModelsForProfile(profile, { silent: true });
 }
 
+function handleModelPickerChange(event) {
+  const model = event.target.value;
+  if (!model) return;
+  const card = event.target.closest(".profile-editor");
+  const profile = profiles.find((item) => item.id === card?.dataset.id);
+  if (!profile) return;
+  profile.model = model;
+  const input = card.querySelector('[data-field="model"]');
+  if (input) input.value = model;
+  normalizeProfileNumbers(profile);
+  syncNumericControls(card, profile);
+  renderModelDatalist();
+}
+
 async function testProfile(id) {
   readSelectedProfileFromDom();
   selectedProfileId = id;
@@ -650,7 +669,7 @@ async function loadModelsForProfile(id, { silent = false, force = true } = {}) {
   const cacheKey = buildModelLoadCacheKey(profile);
   if (!force && modelLoadCache.has(cacheKey)) {
     const cached = modelLoadCache.get(cacheKey);
-    mergeLoadedModelOptions(cached);
+    updateModelPickerForProfile(id);
     return cached;
   }
   if (!profile.baseUrl) {
@@ -667,11 +686,13 @@ async function loadModelsForProfile(id, { silent = false, force = true } = {}) {
     const models = Array.isArray(response.models) ? response.models : [];
     modelLoadCache.set(cacheKey, models);
     autoLoadedModelKeys.add(cacheKey);
-    mergeLoadedModelOptions(models);
-    if (models.length && !profile.model) {
+    if (models.length && (!profile.model || !models.includes(profile.model))) {
       profile.model = models[0];
       renderProfiles();
+    } else {
+      updateModelPickerForProfile(id);
     }
+    if (!silent) focusModelPickerForProfile(id);
     if (!silent) setStatus(t("modelsLoaded", { count: models.length }));
     return models;
   } catch (error) {
@@ -699,22 +720,51 @@ function buildModelLoadCacheKey(profile) {
   ].join("|");
 }
 
-function mergeLoadedModelOptions(models) {
-  loadedModelOptions = [...new Set([
-    ...loadedModelOptions,
-    ...models.map((model) => String(model || "").trim()).filter(Boolean)
-  ])].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
-  renderModelDatalist();
+function getModelOptionsForProfile(profile) {
+  const cacheKey = buildModelLoadCacheKey(profile || {});
+  const cachedModels = modelLoadCache.get(cacheKey) || [];
+  const providerPreset = PROVIDER_PRESETS[profile?.provider] || PROVIDER_PRESETS.custom;
+  return [...new Set([
+    profile?.model,
+    providerPreset.model,
+    ...cachedModels
+  ])]
+    .map((model) => String(model || "").trim())
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+}
+
+function renderModelPickerOptions(profile) {
+  const models = getModelOptionsForProfile(profile);
+  const current = String(profile?.model || "").trim();
+  const hasCurrent = current && models.includes(current);
+  return [
+    `<option value="">${escapeHtml(t("modelName"))}</option>`,
+    current && !hasCurrent ? `<option value="${escapeAttr(current)}" selected>${escapeHtml(current)}</option>` : "",
+    ...models.map((model) => `
+      <option value="${escapeAttr(model)}" ${model === current ? "selected" : ""}>${escapeHtml(model)}</option>
+    `)
+  ].join("");
+}
+
+function updateModelPickerForProfile(id) {
+  const card = profilesNode.querySelector(`.profile-editor[data-id="${cssEscape(id)}"]`);
+  const profile = profiles.find((item) => item.id === id);
+  const picker = card?.querySelector("[data-model-picker]");
+  if (!profile || !picker) return;
+  picker.innerHTML = renderModelPickerOptions(profile);
+  picker.value = getModelOptionsForProfile(profile).includes(profile.model) ? profile.model : "";
+}
+
+function focusModelPickerForProfile(id) {
+  const picker = profilesNode.querySelector(`.profile-editor[data-id="${cssEscape(id)}"] [data-model-picker]`);
+  if (!picker || picker.disabled) return;
+  picker.focus();
 }
 
 function renderModelDatalist() {
   if (!modelPresetsNode) return;
-  const presetModels = Object.values(PROVIDER_PRESETS).map((preset) => preset.model).filter(Boolean);
-  const currentModels = profiles.map((profile) => profile.model).filter(Boolean);
-  const models = [...new Set([...presetModels, ...currentModels, ...loadedModelOptions])]
-    .map((model) => String(model || "").trim())
-    .filter(Boolean)
-    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+  const models = getModelOptionsForProfile(profiles.find((profile) => profile.id === selectedProfileId) || {});
   modelPresetsNode.replaceChildren(...models.map((model) => {
     const option = document.createElement("option");
     option.value = model;
@@ -1182,4 +1232,9 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, "&#096;");
+}
+
+function cssEscape(value) {
+  if (window.CSS?.escape) return window.CSS.escape(String(value || ""));
+  return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
