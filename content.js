@@ -22,6 +22,7 @@
   let renderTimer = 0;
   let activeStreamCancel = null;
   let isGenerating = false;
+  let settingsRefreshPromise = null;
   let activeAppearance = "system";
   let currentLanguage = "system";
   let systemAppearanceQuery = null;
@@ -135,6 +136,12 @@
     setStatus(useFullTextNext ? t("fullTextOn") : t("fullTextOff"));
   });
   modelSelect.addEventListener("change", switchChatModel);
+  modelSelect.addEventListener("pointerdown", () => {
+    refreshSettings({ silent: true }).catch(() => {});
+  });
+  modelSelect.addEventListener("focus", () => {
+    refreshSettings({ silent: true }).catch(() => {});
+  });
 
   shadow.querySelectorAll("[data-mode]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -150,6 +157,12 @@
       if (isPanelOpen) applyPageSplit(true);
     });
   }
+  window.addEventListener("focus", () => {
+    if (isPanelOpen) refreshSettings({ silent: true }).catch(() => {});
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && isPanelOpen) refreshSettings({ silent: true }).catch(() => {});
+  });
 
   input.addEventListener("input", autoResizeInput);
   input.addEventListener("pointerdown", () => {
@@ -180,6 +193,7 @@
     fab.classList.toggle("is-hidden", isPanelOpen);
     applyPageSplit(isPanelOpen);
     if (isPanelOpen) {
+      refreshSettings({ silent: true }).catch(() => {});
       renderConversation(currentConversation);
       setTimeout(() => input.focus(), 40);
     }
@@ -387,6 +401,7 @@
 
   async function runTurn(mode) {
     if (isGenerating) return;
+    await refreshSettings({ silent: true });
     if (!getSelectedProfile()) {
       setStatus(t("noModelSelected"), true);
       renderModelSelect();
@@ -459,16 +474,8 @@
   }
 
   async function loadInitialState() {
-    try {
-      const settings = await sendMessage({ type: "getSettings" });
-      currentSettings = settings;
-      reconcileSelectedProfile();
-      selectedModelLabel = buildSelectedModelLabel();
-      applyLanguage(settings.language);
-      applyAppearance(settings.appearance);
-      renderModelSelect();
-      renderUpdateBanner();
-    } catch {
+    const loaded = await refreshSettings({ silent: true });
+    if (!loaded) {
       currentSettings = null;
       selectedProfileId = "";
       selectedModelLabel = "";
@@ -484,13 +491,13 @@
     try {
       chrome.storage?.onChanged?.addListener((changes, areaName) => {
         if (areaName !== "sync" || !changes.settings) return;
-        applyLanguage(changes.settings.newValue?.language);
-        applyAppearance(changes.settings.newValue?.appearance);
-        currentSettings = changes.settings.newValue || currentSettings;
-        reconcileSelectedProfile();
-        selectedModelLabel = buildSelectedModelLabel();
-        renderModelSelect();
-        renderUpdateBanner();
+        refreshSettings({ silent: true }).catch(() => {
+          currentSettings = changes.settings.newValue || currentSettings;
+          reconcileSelectedProfile();
+          selectedModelLabel = buildSelectedModelLabel();
+          renderModelSelect();
+          renderUpdateBanner();
+        });
       });
     } catch {
       // Storage listeners are optional; initial settings still cover normal page loads.
@@ -552,6 +559,75 @@
       language: currentLanguage,
       compact: true
     });
+  }
+
+  async function refreshSettings({ silent = true } = {}) {
+    if (isGenerating) return true;
+    if (settingsRefreshPromise) return settingsRefreshPromise;
+    settingsRefreshPromise = readLatestSettings()
+      .then((settings) => {
+        if (!settings) throw new Error("No settings snapshot.");
+        currentSettings = settings;
+        reconcileSelectedProfile();
+        selectedModelLabel = buildSelectedModelLabel();
+        applyLanguage(settings.language);
+        applyAppearance(settings.appearance);
+        renderModelSelect();
+        renderUpdateBanner();
+        return true;
+      })
+      .catch((error) => {
+        if (!silent) setStatus(error.message || String(error), true);
+        return false;
+      })
+      .finally(() => {
+        settingsRefreshPromise = null;
+      });
+    return settingsRefreshPromise;
+  }
+
+  async function readLatestSettings() {
+    const [runtimeResult, storageResult] = await Promise.allSettled([
+      sendMessage({ type: "getSettings" }),
+      readStoredSettings()
+    ]);
+    const runtimeSettings = runtimeResult.status === "fulfilled" ? runtimeResult.value : null;
+    const storedSettings = storageResult.status === "fulfilled" ? storageResult.value : null;
+    const runtimeProfiles = getSettingsProfiles(runtimeSettings);
+    const storedProfiles = getSettingsProfiles(storedSettings);
+    if (runtimeProfiles.length) return runtimeSettings;
+    if (storedProfiles.length) {
+      return {
+        ...(runtimeSettings || {}),
+        ...(storedSettings || {}),
+        language: runtimeSettings?.language || storedSettings?.language || "system",
+        appearance: runtimeSettings?.appearance || storedSettings?.appearance || "system",
+        modelProfiles: storedProfiles
+      };
+    }
+    return runtimeSettings || storedSettings || null;
+  }
+
+  function readStoredSettings() {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage?.sync?.get("settings", ({ settings }) => {
+          if (chrome.runtime?.lastError) {
+            resolve(null);
+            return;
+          }
+          resolve(settings || null);
+        });
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  function getSettingsProfiles(settings) {
+    return Array.isArray(settings?.modelProfiles)
+      ? settings.modelProfiles.filter((profile) => profile && typeof profile === "object")
+      : [];
   }
 
   function renderModelSelect() {

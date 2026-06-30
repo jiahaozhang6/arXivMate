@@ -111,6 +111,8 @@ async function handleMessage(message) {
       return getSettings();
     case "saveSettings":
       return saveSettings(message.settings);
+    case "testModelProfile":
+      return testModelProfile(message.profile);
     case "summarizePaper":
       return summarizePaper({
         paper: message.paper,
@@ -230,9 +232,53 @@ async function saveSettings(settings) {
   for (const profile of modelProfiles) {
     validateModelProfile(profile);
   }
+  await testAllModelProfiles(modelProfiles);
 
   await chrome.storage.sync.set({ settings: next });
   return next;
+}
+
+async function testAllModelProfiles(modelProfiles) {
+  if (!modelProfiles.length) return [];
+  const results = await Promise.allSettled(modelProfiles.map((profile) => testModelProfile(profile)));
+  const failures = results
+    .map((result, index) => ({ result, profile: modelProfiles[index] }))
+    .filter(({ result }) => result.status === "rejected")
+    .map(({ result, profile }) => {
+      const label = profile.name || profile.model || profile.id || "Model";
+      return `${label}: ${result.reason?.message || String(result.reason)}`;
+    });
+  if (failures.length) {
+    throw new Error(`以下模型测试失败，设置未保存：${failures.join("；")}`);
+  }
+  return results.map((result) => result.value);
+}
+
+async function testModelProfile(profile) {
+  const normalized = normalizeModelProfile(profile);
+  validateModelProfile(normalized);
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    ...flattenProfile(normalized),
+    maxOutputTokens: Math.min(normalized.maxOutputTokens || 64, 64),
+    temperature: 0
+  };
+  const text = await callChatCompletions(settings, [
+    {
+      role: "system",
+      content: "You are testing an OpenAI-compatible chat completion connection. Reply with OK only."
+    },
+    {
+      role: "user",
+      content: "Reply with OK only."
+    }
+  ]);
+  return {
+    profileId: normalized.id,
+    profileName: normalized.name,
+    model: normalized.model,
+    text
+  };
 }
 
 async function summarizePaper({ paper, mode = "quick", question = "", persist = true, contextMode = "auto", profileId = "" }) {

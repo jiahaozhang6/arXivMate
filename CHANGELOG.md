@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.8 - 2026-06-30
+
+Settings refresh fix.
+
+- Refresh model profiles from storage when the paper assistant opens, gains focus, the model selector is opened, or a request starts.
+- Move model testing into each model editor card and remove the global settings-page test button.
+- Rename the test action to "Test this model" / "测试此模型".
+- Test every configured model before saving settings; if any model fails, settings are not saved.
+- Clarify the storage-safe ZIP update path: overwrite the same extension folder and reload the existing extension card so local notes and chat history remain attached to the same extension ID.
+
 ## 0.1.7 - 2026-06-30
 
 Model selection and cancellation polish.

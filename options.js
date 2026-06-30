@@ -1,6 +1,5 @@
 const form = document.querySelector("#settings-form");
 const statusNode = document.querySelector("#status");
-const testButton = document.querySelector("#test-button");
 const addProfileButton = document.querySelector("#add-profile");
 const addProfileProviderSelect = document.querySelector("#add-profile-provider");
 const profilesNode = document.querySelector("#profiles");
@@ -68,12 +67,15 @@ addProfileButton.addEventListener("click", () => {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  setStatus(t("saving"));
+  setStatus(t("testingAllModels"));
+  setFormBusy(true);
   try {
     await saveCurrentSettings();
     setStatus(t("settingsSaved"));
   } catch (error) {
     setStatus(error.message || String(error), true);
+  } finally {
+    setFormBusy(false);
   }
 });
 
@@ -89,36 +91,6 @@ form.appearance.addEventListener("change", () => {
 
 checkUpdateButton.addEventListener("click", () => {
   checkForUpdate(true);
-});
-
-testButton.addEventListener("click", async () => {
-  if (!selectedProfileId) {
-    setStatus(t("selectModelToTest"), true);
-    return;
-  }
-  setStatus(t("testing"));
-  try {
-    await saveCurrentSettings();
-    const response = await sendMessage({
-      type: "summarizePaper",
-      profileId: selectedProfileId,
-      mode: "ask",
-      question: t("testQuestion"),
-      persist: false,
-      contextMode: "fast",
-      paper: {
-        id: "test",
-        title: "Connection test",
-        authors: "arXivMate",
-        abstract: "This is a short connection test.",
-        subjects: "cs.AI",
-        pdfUrl: ""
-      }
-    });
-    setStatus(t("testSuccess", { text: response.text.slice(0, 100) }));
-  } catch (error) {
-    setStatus(error.message || String(error), true);
-  }
 });
 
 async function loadSettings() {
@@ -158,10 +130,8 @@ function renderProfiles() {
   if (!profiles.length) {
     selectedProfileId = "";
     profilesNode.innerHTML = renderEmptyProfiles();
-    testButton.disabled = true;
     return;
   }
-  testButton.disabled = false;
   if (!profiles.some((profile) => profile.id === selectedProfileId)) {
     selectedProfileId = profiles[0].id;
   }
@@ -217,6 +187,7 @@ function renderProfileEditor(profile) {
         <strong>${escapeHtml(profile.name || profile.model || t("untitledProfile"))}</strong>
       </div>
       <div class="profile-editor-actions">
+        <button type="button" data-action="test-profile">${escapeHtml(t("testModel"))}</button>
         <button type="button" data-action="duplicate">${escapeHtml(t("duplicateProfile"))}</button>
         <button type="button" class="danger" data-action="remove">${escapeHtml(t("remove"))}</button>
       </div>
@@ -362,6 +333,11 @@ function handleProfileAction(event) {
   const profile = profiles.find((item) => item.id === id);
   if (!profile) return;
 
+  if (action === "test-profile") {
+    testProfile(id);
+    return;
+  }
+
   if (action === "duplicate") {
     readSelectedProfileFromDom();
     const duplicate = {
@@ -390,6 +366,32 @@ function handleProfileAction(event) {
     revealApiKey = false;
     renderProfiles();
   }
+}
+
+async function testProfile(id) {
+  readSelectedProfileFromDom();
+  selectedProfileId = id;
+  const profile = profiles.find((item) => item.id === id);
+  if (!profile) return;
+  setStatus(t("testing"));
+  setFormBusy(true);
+  try {
+    const response = await sendMessage({
+      type: "testModelProfile",
+      profile
+    });
+    setStatus(t("testSuccess", { text: String(response.text || "OK").slice(0, 100) }));
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    setFormBusy(false);
+  }
+}
+
+function setFormBusy(isBusy) {
+  form.querySelectorAll("button, input, select").forEach((node) => {
+    node.disabled = Boolean(isBusy);
+  });
 }
 
 function readSelectedProfileFromDom() {
