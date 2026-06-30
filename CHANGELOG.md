@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.6 - 2026-06-30
+
+Release-based updates.
+
+- Use GitHub Releases, not Tags, as the source for user-facing update checks.
+- Point update buttons and documentation to the latest stable Release download flow.
+- Keep tag names only as the version identifier behind a Release.
+
 ## 0.1.5 - 2026-06-30
 
 Stable update prompts.

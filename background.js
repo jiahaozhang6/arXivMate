@@ -30,8 +30,8 @@ const MAX_CONTEXT_CACHE_ENTRIES = 80;
 const PDF_TEXT_MIN_CHARS = 1600;
 const PDF_EXTRACT_MAX_PAGES = 80;
 const PDF_TEXT_CONTEXT_SOURCE = "PDF 文本抽取（未上传 PDF 文件）+ arXiv 页面元数据";
-const GITHUB_TAGS_FEED_URL = "https://github.com/jiahaozhang6/arXivMate/tags.atom";
-const GITHUB_TAGS_PAGE_URL = "https://github.com/jiahaozhang6/arXivMate/tags";
+const GITHUB_RELEASES_API_URL = "https://api.github.com/repos/jiahaozhang6/arXivMate/releases";
+const GITHUB_RELEASES_PAGE_URL = "https://github.com/jiahaozhang6/arXivMate/releases";
 const UPDATE_CHECK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 let pdfjsReady = null;
@@ -236,27 +236,35 @@ async function checkForUpdate({ force = false } = {}) {
     return {
       ...updateCheck,
       latestTag,
-      latestZipUrl: updateCheck.latestZipUrl || buildTagZipUrl(latestTag),
+      latestZipUrl: updateCheck.latestZipUrl || buildReleaseZipUrl(latestTag),
+      releaseUrl: updateCheck.releaseUrl || updateCheck.sourceUrl || GITHUB_RELEASES_PAGE_URL,
       localVersion,
       updateAvailable: compareVersions(updateCheck.latestVersion, localVersion) > 0
     };
   }
 
   try {
-    const response = await fetch(`${GITHUB_TAGS_FEED_URL}?t=${now}`, { cache: "no-store" });
+    const response = await fetch(`${GITHUB_RELEASES_API_URL}?t=${now}`, {
+      cache: "no-store",
+      headers: {
+        Accept: "application/vnd.github+json"
+      }
+    });
     if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
-    const tagFeed = await response.text();
-    const latestTag = findLatestVersionTag(tagFeed);
-    if (!latestTag) throw new Error("GitHub has no stable semantic version tag.");
+    const releases = await response.json();
+    const release = findLatestStableRelease(releases);
+    if (!release) throw new Error("GitHub has no stable release.");
+    const latestTag = release.tag_name || versionToTag(release.name);
     const latestVersion = tagToVersion(latestTag);
     const result = {
       localVersion,
       latestVersion,
       latestTag,
-      latestZipUrl: buildTagZipUrl(latestTag),
+      latestZipUrl: release.zipball_url || buildReleaseZipUrl(latestTag),
       updateAvailable: compareVersions(latestVersion, localVersion) > 0,
       checkedAt: new Date(now).toISOString(),
-      sourceUrl: GITHUB_TAGS_PAGE_URL,
+      sourceUrl: release.html_url || GITHUB_RELEASES_PAGE_URL,
+      releaseUrl: release.html_url || GITHUB_RELEASES_PAGE_URL,
       repositoryUrl: "https://github.com/jiahaozhang6/arXivMate",
       error: ""
     };
@@ -267,10 +275,11 @@ async function checkForUpdate({ force = false } = {}) {
       localVersion,
       latestVersion: updateCheck?.latestVersion || localVersion,
       latestTag: updateCheck?.latestTag || versionToTag(updateCheck?.latestVersion || localVersion),
-      latestZipUrl: updateCheck?.latestZipUrl || buildTagZipUrl(updateCheck?.latestTag || versionToTag(updateCheck?.latestVersion || localVersion)),
+      latestZipUrl: updateCheck?.latestZipUrl || buildReleaseZipUrl(updateCheck?.latestTag || versionToTag(updateCheck?.latestVersion || localVersion)),
       updateAvailable: updateCheck?.latestVersion ? compareVersions(updateCheck.latestVersion, localVersion) > 0 : false,
       checkedAt: updateCheck?.checkedAt || "",
-      sourceUrl: GITHUB_TAGS_PAGE_URL,
+      sourceUrl: updateCheck?.sourceUrl || GITHUB_RELEASES_PAGE_URL,
+      releaseUrl: updateCheck?.releaseUrl || updateCheck?.sourceUrl || GITHUB_RELEASES_PAGE_URL,
       repositoryUrl: "https://github.com/jiahaozhang6/arXivMate",
       error: error.message || String(error)
     };
@@ -1549,21 +1558,19 @@ function tagToVersion(tag) {
   return normalizeVersion(tag);
 }
 
-function buildTagZipUrl(tag) {
+function buildReleaseZipUrl(tag) {
   const normalized = versionToTag(tag);
   return normalized ? `https://github.com/jiahaozhang6/arXivMate/archive/refs/tags/${encodeURIComponent(normalized)}.zip` : "";
 }
 
-function findLatestVersionTag(tags) {
-  const names = typeof tags === "string"
-    ? [...tags.matchAll(/<title>(v?\d+\.\d+\.\d+)<\/title>/gi)].map((match) => match[1])
-    : Array.isArray(tags)
-    ? tags.map((tag) => typeof tag === "string" ? tag : tag?.name)
+function findLatestStableRelease(releases) {
+  const stable = Array.isArray(releases)
+    ? releases.filter((release) => {
+      const tag = normalizeString(release?.tag_name || release?.name);
+      return !release?.draft && !release?.prerelease && /^v?\d+\.\d+\.\d+$/i.test(tag);
+    })
     : [];
-  return names
-    .map((name) => normalizeString(name))
-    .filter((name) => /^v?\d+\.\d+\.\d+$/i.test(name))
-    .sort((left, right) => compareVersions(right, left))[0] || "";
+  return stable.sort((left, right) => compareVersions(right.tag_name || right.name, left.tag_name || left.name))[0] || null;
 }
 
 function resolveOutputLanguageInstruction(language) {

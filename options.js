@@ -11,7 +11,7 @@ const checkUpdateButton = document.querySelector("#check-update");
 const updateActionsNode = document.querySelector("#update-actions");
 const updateStepsNode = document.querySelector("#update-steps");
 const downloadUpdateLink = document.querySelector("#download-update");
-const openTagsLink = document.querySelector("#open-tags");
+const openReleaseLink = document.querySelector("#open-release");
 const globalUpdateBannerNode = document.querySelector("#global-update-banner");
 const projectVersionNode = document.querySelector("#project-version");
 const I18N = window.ArxivMateI18n;
@@ -614,13 +614,13 @@ function renderUpdateActions(result) {
   updateStepsNode.hidden = !show;
   if (!show) {
     downloadUpdateLink.removeAttribute("href");
-    openTagsLink.removeAttribute("href");
+    openReleaseLink.removeAttribute("href");
     updateStepsNode.innerHTML = "";
     return;
   }
 
   downloadUpdateLink.href = result.latestZipUrl;
-  openTagsLink.href = result.sourceUrl || "https://github.com/jiahaozhang6/arXivMate/tags";
+  openReleaseLink.href = result.releaseUrl || result.sourceUrl || "https://github.com/jiahaozhang6/arXivMate/releases";
   updateStepsNode.innerHTML = `
     <strong>${escapeHtml(t("gitUpgradeTitle"))}</strong>
     <ol>
@@ -632,7 +632,7 @@ function renderUpdateActions(result) {
 git pull</code></pre>
     <strong>${escapeHtml(t("zipUpgradeTitle"))}</strong>
     <ol>
-      <li>${escapeHtml(t("zipUpgradeStep1", { tag: result.latestTag }))}</li>
+      <li>${escapeHtml(t("zipUpgradeStep1", { version: result.latestVersion, release: result.latestTag }))}</li>
       <li>${escapeHtml(t("zipUpgradeStep2"))}</li>
       <li>${escapeHtml(t("zipUpgradeStep3"))}</li>
       <li>${escapeHtml(t("zipUpgradeStep4"))}</li>
