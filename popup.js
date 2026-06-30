@@ -47,7 +47,48 @@ function updateTabStatus() {
 function isSupportedPaperTab(url) {
   const value = String(url || "");
   return /https?:\/\/(www\.)?arxiv\.org\/(abs|pdf)\//i.test(value) ||
-    /\.pdf(?:[?#]|$)/i.test(value);
+    /\.pdf(?:[?#]|$)/i.test(value) ||
+    isKnownDynamicPdfUrl(value);
+}
+
+function isKnownDynamicPdfUrl(url) {
+  return isIeeeStampPdfUrl(url) ||
+    matchesHostPath(url, /(^|\.)dl\.acm\.org$/i, /\/doi\/pdf\//i) ||
+    matchesHostPath(url, /(^|\.)link\.springer\.com$/i, /\/content\/pdf\//i) ||
+    matchesHostPath(url, /(^|\.)onlinelibrary\.wiley\.com$/i, /\/doi\/pdf(?:direct)?\//i) ||
+    isScienceDirectPdfUrl(url) ||
+    matchesHostPath(url, /(^|\.)researchgate\.net$/i, /\/publication\/.+\/download/i);
+}
+
+function isIeeeStampPdfUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return /(^|\.)ieeexplore\.ieee\.org$/i.test(parsed.hostname) &&
+      /\/stamp\/stamp\.jsp$/i.test(parsed.pathname) &&
+      Boolean(parsed.searchParams.get("arnumber"));
+  } catch {
+    return false;
+  }
+}
+
+function isScienceDirectPdfUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return /(^|\.)sciencedirect\.com$/i.test(parsed.hostname) &&
+      /\/science\/article\/pii\//i.test(parsed.pathname) &&
+      (/\/pdf\//i.test(parsed.pathname) || /[?&](?:download|via|isDTMRedir)=/i.test(parsed.search));
+  } catch {
+    return false;
+  }
+}
+
+function matchesHostPath(url, hostPattern, pathPattern) {
+  try {
+    const parsed = new URL(url);
+    return hostPattern.test(parsed.hostname) && pathPattern.test(parsed.pathname);
+  } catch {
+    return false;
+  }
 }
 
 function renderUpdateBanner() {

@@ -5,7 +5,23 @@
   const embeddedPanelPaper = readEmbeddedPanelPaper();
   const isEmbeddedPanel = Boolean(embeddedPanelPaper);
   let paper = embeddedPanelPaper || extractPaper();
-  if (!isEmbeddedPanel && !isSupportedReadingPage(paper)) return;
+  const probePromise = !isEmbeddedPanel && !isSupportedReadingPage(paper) && shouldProbePdfUrl(location.href)
+    ? probeCurrentPdfDocument()
+    : null;
+  if (!isEmbeddedPanel && !isSupportedReadingPage(paper) && !probePromise) return;
+  if (probePromise) {
+    probePromise
+      .then((detectedPaper) => {
+        if (!detectedPaper) return;
+        paper = detectedPaper;
+        if (!paper.id) paper = ensureDocumentIdentity(paper);
+        if (!paper.id && !paper.title) return;
+        removeExistingArxivMateRoots();
+        installIframePanel(paper);
+      })
+      .catch(() => {});
+    return;
+  }
   if (!paper.id) paper = ensureDocumentIdentity(paper);
   if (!paper.id && !paper.title) return;
 
@@ -661,6 +677,7 @@
     setBusy(true);
     setStatus(contextMode === "full" ? t("preparingFull") : t("preparingFast"));
     const preview = appendPreviewTurn(userText);
+    let latestStreamMeta = null;
     if (mode === "ask") {
       input.value = "";
       autoResizeInput();
@@ -682,6 +699,7 @@
         profileId: selectedProfileId
       }, {
         onMeta(meta) {
+          latestStreamMeta = meta || latestStreamMeta;
           const source = meta?.source ? ` · ${meta.source}` : "";
           const usage = formatContextUsage(meta, currentLanguage);
           setStatus(`${t("generating")}${source}${usage ? ` · ${usage}` : ""}`);
@@ -697,13 +715,21 @@
       const usage = formatContextUsage(response, currentLanguage);
       setStatus(`${t("done")} · ${response.source}${usage ? ` · ${usage}` : ""}`);
     } catch (error) {
-      renderConversation(currentConversation);
-      if (mode === "ask") input.value = userText;
       if (error?.name === "AbortError" || error?.message === "generation-aborted") {
-        setStatus(t("generationStopped"));
+        await preserveStoppedGeneration({
+          preview,
+          mode,
+          question: userText,
+          meta: latestStreamMeta,
+          partialText: error.partialText || getPreviewAssistantText(preview)
+        });
       } else if (isExtensionContextInvalidated(error)) {
+        renderConversation(currentConversation);
+        if (mode === "ask") input.value = userText;
         showExtensionReloadNotice(error);
       } else {
+        renderConversation(currentConversation);
+        if (mode === "ask") input.value = userText;
         setStatus(error.message || String(error), true);
       }
     } finally {
@@ -747,18 +773,118 @@
     if (contextMode !== "full" || payload.fullText) return payload;
     const maxChars = Number(getSelectedProfile()?.maxContextChars || currentSettings?.maxContextChars || 14000);
     try {
-      const text = await extractPdfTextInPage(payload.pdfUrl || payload.pageUrl || location.href, maxChars);
-      if (text && text.length > 400) {
-        payload.fullText = text;
-        payload.contextSource = "浏览器页面 PDF.js 正文抽取 + 页面元数据";
+      const extraction = await extractPdfTextInPage(payload.pdfUrl || getCurrentPdfUrl() || payload.pageUrl || location.href, maxChars);
+      if (extraction.text && extraction.text.length > 400) {
+        payload.fullText = extraction.text;
+        payload.contextSource = extraction.source;
       }
     } catch (error) {
-      payload.contextSource = `浏览器页面 PDF 抽取失败：${error.message || String(error)}`;
+      payload.contextSource = `浏览器页面 PDF 抽取失败：${formatPdfExtractionError(error)}`;
     }
     return payload;
   }
 
   async function extractPdfTextInPage(pdfUrl, maxChars) {
+    const parentExtraction = await requestParentPdfText(maxChars);
+    if (parentExtraction?.text && parentExtraction.text.length > 400) {
+      return parentExtraction;
+    }
+
+    const ieeeExtraction = await extractIeeeFullText(maxChars);
+    if (ieeeExtraction?.text && ieeeExtraction.text.length > 400) {
+      return ieeeExtraction;
+    }
+
+    const viewerText = extractPdfViewerTextFromPage(maxChars);
+    if (viewerText.length > 400) {
+      return {
+        text: viewerText,
+        source: "浏览器 PDF 阅读器文本层 + 页面元数据"
+      };
+    }
+
+    return extractPdfTextViaPdfJs(pdfUrl, maxChars);
+  }
+
+  async function extractIeeeFullText(maxChars) {
+    const articleNumber = extractIeeeArticleNumber(location.href) || extractIeeeArticleNumber(paper?.pdfUrl);
+    if (!articleNumber) return null;
+    const charLimit = Math.max(4000, Number(maxChars) || 14000);
+    const response = await fetch(`https://ieeexplore.ieee.org/rest/document/${encodeURIComponent(articleNumber)}`, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: {
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      }
+    });
+    if (!response.ok) {
+      if (response.status === 418) {
+        throw new Error("IEEE 正文接口触发访问限制（418），请稍后刷新页面重试。");
+      }
+      throw new Error(`IEEE 正文接口返回 ${response.status}`);
+    }
+    const html = await response.text();
+    const text = ieeeRestHtmlToText(html, charLimit);
+    if (text.length <= 400) {
+      throw new Error("IEEE 正文接口没有返回可用正文。");
+    }
+    return {
+      text,
+      source: "IEEE Xplore REST 正文 + 页面元数据"
+    };
+  }
+
+  function ieeeRestHtmlToText(html, maxChars) {
+    const doc = new DOMParser().parseFromString(String(html || ""), "text/html");
+    doc.querySelectorAll([
+      "script",
+      "style",
+      "noscript",
+      "svg",
+      ".u-hidden",
+      ".hidden",
+      ".MathJax_Preview"
+    ].join(",")).forEach((node) => node.remove());
+    doc.querySelectorAll("a[ref-type='bibr'], a[ref-type='fig'], a[ref-type='table'], sup").forEach((node) => {
+      const text = clean(node.textContent);
+      node.replaceWith(text ? ` ${text} ` : " ");
+    });
+    const sections = Array.from(doc.querySelectorAll(".section, section, #article"))
+      .map((section) => sectionToReadableText(section))
+      .filter(Boolean);
+    const text = sections.length ? sections.join("\n\n") : htmlToReadableText(doc.body?.innerHTML || html);
+    return normalizeTextBlock(text)
+      .replace(/\s+\[\s*/g, " [")
+      .replace(/\s+\]/g, "]")
+      .slice(0, Math.max(4000, Number(maxChars) || 14000));
+  }
+
+  function sectionToReadableText(section) {
+    const blocks = [];
+    section.querySelectorAll("h1, h2, h3, h4, p, li, figcaption, .caption, .article-hdr").forEach((node) => {
+      const text = clean(node.textContent);
+      if (!text || isIeeeBoilerplateLine(text)) return;
+      blocks.push(text);
+    });
+    return normalizeTextBlock(dedupeConsecutiveLines(blocks).join("\n"));
+  }
+
+  function isIeeeBoilerplateLine(text) {
+    return /^(SECTION\s+[IVXLCDM]+\.?|References|Acknowledgment|Footnotes)$/i.test(text) ||
+      /^View All Authors/i.test(text);
+  }
+
+  function htmlToReadableText(html) {
+    const doc = new DOMParser().parseFromString(String(html || ""), "text/html");
+    doc.querySelectorAll("script, style, noscript, nav, header, footer").forEach((node) => node.remove());
+    return normalizeTextBlock(doc.body?.textContent || "");
+  }
+
+  async function extractPdfTextViaPdfJs(pdfUrl, maxChars) {
+    if (isIeeeStampPdfUrl(pdfUrl || location.href)) {
+      throw new Error("IEEE Xplore 的 stamp.jsp 不是稳定的原始 PDF 下载地址，且 IEEE 正文接口/页面文本层当前不可读。请稍后刷新 IEEE 页面重试。");
+    }
     const pdfjs = window.pdfjsLib;
     if (!pdfjs?.getDocument) {
       throw new Error("前端 PDF.js 未加载，请重新加载扩展。");
@@ -800,7 +926,182 @@
     try {
       await pdfDoc.destroy();
     } catch {}
-    return normalizeTextBlock(parts.join("\n\n")).slice(0, charLimit);
+    return {
+      text: normalizeTextBlock(parts.join("\n\n")).slice(0, charLimit),
+      source: "浏览器 PDF.js 正文抽取 + 页面元数据"
+    };
+  }
+
+  function requestParentPdfText(maxChars) {
+    if (!isEmbeddedPanel || window.parent === window) return Promise.resolve(null);
+    const requestId = `alc-pdf-text-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        window.removeEventListener("message", onMessage);
+        resolve(null);
+      }, 2500);
+      const onMessage = (event) => {
+        if (event.source !== window.parent) return;
+        if (event.data?.type !== "alc-parent-pdf-text-result" || event.data.requestId !== requestId) return;
+        clearTimeout(timeout);
+        window.removeEventListener("message", onMessage);
+        resolve(event.data.extraction || null);
+      };
+      window.addEventListener("message", onMessage);
+      try {
+        window.parent.postMessage({
+          type: "alc-extract-parent-pdf-text",
+          requestId,
+          maxChars
+        }, "*");
+      } catch {
+        clearTimeout(timeout);
+        window.removeEventListener("message", onMessage);
+        resolve(null);
+      }
+    });
+  }
+
+  function extractPdfViewerTextFromPage(maxChars) {
+    const charLimit = Math.max(4000, Number(maxChars) || 14000);
+    const chunks = [];
+    collectPdfTextLayerChunksDeep(document, chunks);
+    const textLayerText = cleanViewerText(chunks.join("\n"), charLimit);
+    if (textLayerText.length > 400) return textLayerText;
+
+    const selectionText = cleanViewerText(String(window.getSelection?.() || ""), charLimit);
+    if (selectionText.length > 400) return selectionText;
+
+    const selectedAllText = extractPdfTextByTemporarySelection(charLimit);
+    if (selectedAllText.length > 400) return selectedAllText;
+
+    const bodyText = hasPdfViewerElement() ? cleanViewerText(document.body?.innerText || "", charLimit) : "";
+    return bodyText.length > 400 ? bodyText : "";
+  }
+
+  function extractPdfTextByTemporarySelection(maxChars) {
+    const charLimit = Math.max(4000, Number(maxChars) || 14000);
+    const selection = window.getSelection?.();
+    if (!selection) return "";
+    const savedRanges = [];
+    for (let index = 0; index < selection.rangeCount; index += 1) {
+      savedRanges.push(selection.getRangeAt(index).cloneRange());
+    }
+    const activeElement = document.activeElement;
+    const focusTargets = [
+      document.querySelector("pdf-viewer"),
+      document.querySelector("embed[type='application/pdf']"),
+      document.querySelector("object[type='application/pdf']"),
+      document.body
+    ].filter(Boolean);
+
+    try {
+      for (const target of focusTargets) {
+        focusElementForSelection(target);
+        selection.removeAllRanges();
+        try {
+          document.execCommand?.("selectAll");
+        } catch {}
+        let text = cleanViewerText(String(selection || ""), charLimit);
+        if (text.length > 400) return text;
+
+        try {
+          const range = document.createRange();
+          range.selectNodeContents(target);
+          selection.removeAllRanges();
+          selection.addRange(range);
+          text = cleanViewerText(String(selection || ""), charLimit);
+          if (text.length > 400) return text;
+        } catch {}
+      }
+    } finally {
+      selection.removeAllRanges();
+      savedRanges.forEach((range) => selection.addRange(range));
+      try {
+        activeElement?.focus?.({ preventScroll: true });
+      } catch {}
+    }
+    return "";
+  }
+
+  function focusElementForSelection(node) {
+    if (!node?.focus) return;
+    const hadTabIndex = node.hasAttribute?.("tabindex");
+    const previousTabIndex = node.getAttribute?.("tabindex");
+    try {
+      if (!hadTabIndex) node.setAttribute?.("tabindex", "-1");
+      node.focus({ preventScroll: true });
+    } catch {}
+    try {
+      if (!hadTabIndex) {
+        node.removeAttribute?.("tabindex");
+      } else if (previousTabIndex !== null) {
+        node.setAttribute?.("tabindex", previousTabIndex);
+      }
+    } catch {}
+  }
+
+  function collectPdfTextLayerChunksDeep(root, chunks, depth = 0) {
+    if (!root || depth > 4) return;
+    collectPdfTextLayerChunks(root, chunks);
+    root.querySelectorAll?.("*").forEach((node) => {
+      if (node.shadowRoot) collectPdfTextLayerChunksDeep(node.shadowRoot, chunks, depth + 1);
+    });
+  }
+
+  function collectPdfTextLayerChunks(root, chunks) {
+    if (!root) return;
+    root.querySelectorAll([
+      ".textLayer",
+      ".textLayer span",
+      ".page .textLayer",
+      "[data-page-number]",
+      ".page",
+      "pdf-viewer-text-layer",
+      "viewer-page",
+      "embed[type='application/pdf']"
+    ].join(",")).forEach((node) => {
+      const text = node.innerText || node.textContent || node.getAttribute("aria-label") || "";
+      if (text && text.trim().length > 20) chunks.push(text);
+    });
+  }
+
+  function cleanViewerText(value, maxChars) {
+    const charLimit = Math.max(4000, Number(maxChars) || 14000);
+    const lines = normalizeTextBlock(value)
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !isPdfViewerUiLine(line));
+    return normalizeTextBlock(dedupeConsecutiveLines(lines).join("\n")).slice(0, charLimit);
+  }
+
+  function isPdfViewerUiLine(line) {
+    const text = String(line || "").trim();
+    if (!text) return true;
+    if (/^(arXivMate|AI|PDF|模型|全文|复制|保存|历史|清空|设置|发送|停止)$/i.test(text)) return true;
+    if (/^\d+\s*\/\s*\d+$/.test(text)) return true;
+    if (/^(zoom|download|print|page|fit|rotate|menu|thumbnail|outline|attachment)$/i.test(text)) return true;
+    if (/^(正在生成|正在抽取|上下文|完成|已停止)/.test(text)) return true;
+    return false;
+  }
+
+  function dedupeConsecutiveLines(lines) {
+    const result = [];
+    let previous = "";
+    lines.forEach((line) => {
+      if (line === previous) return;
+      result.push(line);
+      previous = line;
+    });
+    return result;
+  }
+
+  function formatPdfExtractionError(error) {
+    const message = error?.message || String(error);
+    if (/Invalid PDF structure|Missing PDF|Unexpected server response|not a PDF/i.test(message)) {
+      return `${message}；当前链接可能返回的是阅读器页面或权限页，不是原始 PDF 字节，已先尝试读取页面文本层。`;
+    }
+    return message;
   }
 
   function installSettingsChangeListener() {
@@ -1236,6 +1537,88 @@
     scheduleConversationRender(preview);
   }
 
+  function getPreviewAssistantText(preview) {
+    const messages = Array.isArray(preview?.messages) ? preview.messages : [];
+    const assistant = messages.find((message) => message.id === "preview-assistant");
+    return assistant?.text || "";
+  }
+
+  function finalizePreviewConversation(preview, partialText) {
+    const text = cleanPartialGenerationText(partialText);
+    const messages = Array.isArray(preview?.messages) ? preview.messages : [];
+    const stoppedId = Date.now();
+    const finalizedMessages = messages.map((message) => {
+      if (message.id === "preview-user") {
+        return {
+          ...message,
+          id: `stopped-user-${stoppedId}`
+        };
+      }
+      if (message.id === "preview-assistant") {
+        return {
+          ...message,
+          id: `stopped-assistant-${stoppedId}`,
+          text,
+          streaming: false,
+          stopped: true
+        };
+      }
+      return message;
+    });
+    const now = new Date().toISOString();
+    return {
+      ...(preview || {}),
+      id: paper.id,
+      title: paper.title || preview?.title,
+      updatedAt: now,
+      lastAnswer: text,
+      lastStopped: true,
+      messageCount: finalizedMessages.length,
+      turnCount: finalizedMessages.filter((message) => message.role === "user").length,
+      messages: finalizedMessages
+    };
+  }
+
+  async function preserveStoppedGeneration({ preview, mode, question, meta, partialText }) {
+    const text = cleanPartialGenerationText(partialText);
+    if (!text) {
+      renderConversation(currentConversation);
+      setStatus(t("generationStopped"));
+      return;
+    }
+    currentResult = text;
+    const fallbackConversation = finalizePreviewConversation(preview, text);
+    currentConversation = fallbackConversation;
+    flushScheduledRender();
+    renderConversation(currentConversation);
+    setStatus(t("generationStopped"));
+
+    try {
+      const response = await sendMessage({
+        type: "appendPartialConversationTurn",
+        paper,
+        mode,
+        question,
+        answer: text,
+        source: meta?.source || "",
+        profileId: selectedProfileId,
+        contextTokens: meta?.contextTokens,
+        contextWindow: meta?.contextWindow,
+        contextCapped: meta?.contextCapped
+      });
+      currentConversation = response.conversation || currentConversation;
+      currentResult = response.text || currentResult;
+      renderConversation(currentConversation);
+    } catch {
+      // Keeping the local finalized preview is better than making stopped output disappear.
+    }
+  }
+
+  function cleanPartialGenerationText(value) {
+    const text = String(value || "").trim();
+    return text === t("generatedFallback") ? "" : text;
+  }
+
   function scheduleConversationRender(conversation) {
     if (renderTimer) return;
     renderTimer = setTimeout(() => {
@@ -1259,7 +1642,7 @@
     chat.innerHTML = messages.map((message) => `
       <article class="alc-message alc-message-${message.role}${message.streaming ? " is-streaming" : ""}">
         <div class="alc-bubble">
-          <div class="alc-message-meta">${message.role === "user" ? escapeHtml(t("you")) : "AI"} · ${formatTime(message.createdAt, currentLanguage)}${message.mode ? ` · ${escapeHtml(modeLabel(message.mode, currentLanguage))}` : ""}${message.role === "assistant" ? formatMessageUsageMeta(message, currentLanguage) : ""}</div>
+          <div class="alc-message-meta">${message.role === "user" ? escapeHtml(t("you")) : "AI"} · ${formatTime(message.createdAt, currentLanguage)}${message.mode ? ` · ${escapeHtml(modeLabel(message.mode, currentLanguage))}` : ""}${message.stopped ? ` · ${escapeHtml(t("stoppedBadge"))}` : ""}${message.role === "assistant" ? formatMessageUsageMeta(message, currentLanguage) : ""}</div>
           <div class="alc-message-body">${message.role === "assistant" ? markdownToHtml(message.text || "") : escapeHtml(message.text || "")}</div>
         </div>
       </article>
@@ -1360,7 +1743,10 @@
         cancelled = true;
         if (!settled) {
           settled = true;
-          reject(Object.assign(new Error("generation-aborted"), { name: "AbortError" }));
+          reject(Object.assign(new Error("generation-aborted"), {
+            name: "AbortError",
+            partialText: latestText
+          }));
         }
         try {
           port?.disconnect();
@@ -1380,7 +1766,10 @@
           fallbackCancelled = true;
           if (!settled) {
             settled = true;
-            reject(Object.assign(new Error("generation-aborted"), { name: "AbortError" }));
+            reject(Object.assign(new Error("generation-aborted"), {
+              name: "AbortError",
+              partialText: latestText
+            }));
           }
         };
         sendMessage(payload).then((data) => {
@@ -1451,14 +1840,12 @@
     activeStreamCancel();
     activeStreamCancel = null;
     flushScheduledRender();
-    renderConversation(currentConversation);
-    setBusy(false);
     setStatus(t("generationStopped"));
     input.focus();
   }
 
   function isPdfPage() {
-    return isPdfLikeUrl(location.href) || Boolean(document.querySelector("embed[type='application/pdf'], pdf-viewer"));
+    return isPdfLikeUrl(location.href) || hasPdfViewerElement();
   }
 
   function isSupportedReadingPage(value) {
@@ -1701,6 +2088,9 @@
       if (event.data?.type === "alc-restore-layout") {
         frameLayout = getDefaultPanelLayout();
         applyFrameLayout(true);
+      }
+      if (event.data?.type === "alc-extract-parent-pdf-text") {
+        handleParentPdfTextRequest(event, frame);
       }
       if (event.data?.type === "alc-resize-start") {
         startFrameGesture("resize", {
@@ -1960,6 +2350,67 @@ function runtimeUrl(path) {
   }
 }
 
+function sendRuntimeMessage(payload) {
+  return new Promise((resolve, reject) => {
+    if (!isRuntimeAvailable()) {
+      reject(new Error("Extension runtime is unavailable."));
+      return;
+    }
+    try {
+      chrome.runtime.sendMessage(payload, (response) => {
+        const lastError = chrome.runtime.lastError;
+        if (lastError) {
+          reject(new Error(lastError.message));
+          return;
+        }
+        if (!response?.ok) {
+          reject(new Error(response?.error || "Extension background returned no valid response."));
+          return;
+        }
+        resolve(response.data);
+      });
+    } catch (error) {
+      reject(error);
+        }
+      });
+    }
+
+    async function handleParentPdfTextRequest(event, frameNode) {
+      if (event.source !== frameNode.contentWindow) return;
+      const requestId = event.data?.requestId || "";
+      try {
+        const maxChars = Number(event.data?.maxChars) || 14000;
+        let extraction = null;
+        try {
+          extraction = await extractIeeeFullText(maxChars);
+        } catch {}
+        const viewerText = extraction ? "" : extractPdfViewerTextFromPage(maxChars);
+        if (!extraction && viewerText.length > 400) {
+          extraction = {
+            text: viewerText,
+            source: "父页面 PDF 阅读器文本层 + 页面元数据"
+          };
+        }
+        if (!extraction && !isIeeeStampPdfUrl(location.href)) {
+          const pdfUrl = getCurrentPdfUrl() || paperData.pdfUrl || location.href;
+          extraction = await extractPdfTextViaPdfJs(pdfUrl, maxChars);
+          extraction.source = "父页面 PDF.js 正文抽取 + 页面元数据";
+        }
+        frameNode.contentWindow?.postMessage({
+          type: "alc-parent-pdf-text-result",
+          requestId,
+          extraction
+        }, "*");
+      } catch (error) {
+        frameNode.contentWindow?.postMessage({
+          type: "alc-parent-pdf-text-result",
+          requestId,
+          extraction: null,
+          error: error.message || String(error)
+        }, "*");
+      }
+    }
+
 function getRuntimeLastErrorMessage() {
   try {
     return chrome?.runtime?.lastError?.message || "";
@@ -2008,10 +2459,11 @@ function findLastAssistantText(conversation) {
 function extractPaper() {
   const arxivId = extractArxivId(location.href);
   const isPdf = isCurrentPdfPage();
+  const currentPdfUrl = getCurrentPdfUrl();
   const title = getField(".title.mathjax", "Title:") ||
     document.querySelector("meta[name='citation_title']")?.content ||
     extractPdfTitle() ||
-    extractTitleFromPdfUrl(location.href) ||
+    extractTitleFromPdfUrl(currentPdfUrl || location.href) ||
     document.title.replace(/\s*\|\s*arXiv.*$/i, "");
   const authors = getAuthors();
   const abstract = getField("blockquote.abstract", "Abstract:");
@@ -2023,6 +2475,7 @@ function extractPaper() {
   const paperUpdatedAt = extractUpdatedDate(document);
   const pdfUrl = document.querySelector("meta[name='citation_pdf_url']")?.content ||
     document.querySelector("a[title='Download PDF']")?.href ||
+    currentPdfUrl ||
     extractPdfUrl(location.href, arxivId);
   const id = arxivId || (isPdf ? createPdfDocumentId(pdfUrl || location.href) : "");
 
@@ -2036,7 +2489,7 @@ function extractPaper() {
     comments: clean(comments),
     submittedAt: clean(submittedAt),
     paperUpdatedAt: clean(paperUpdatedAt),
-    pdfUrl: clean(pdfUrl || (isPdf ? location.href : "")),
+    pdfUrl: clean(pdfUrl || (isPdf ? currentPdfUrl || location.href : "")),
     pageUrl: clean(location.href)
   };
 }
@@ -2097,6 +2550,8 @@ function extractPdfUrl(url, id) {
 function extractPdfTitle() {
   const title = document.querySelector("pdf-viewer")?.getAttribute("document-title") ||
     document.querySelector("embed[type='application/pdf']")?.getAttribute("title") ||
+    document.querySelector("meta[name='citation_title']")?.content ||
+    document.querySelector("meta[property='og:title']")?.content ||
     "";
   return String(title).replace(/\.pdf$/i, "").replace(/_/g, " ").trim();
 }
@@ -2104,6 +2559,8 @@ function extractPdfTitle() {
 function extractTitleFromPdfUrl(url) {
   try {
     const parsed = new URL(url);
+    const ieeeNumber = extractIeeeArticleNumber(parsed.href);
+    if (ieeeNumber) return `IEEE ${ieeeNumber}`;
     const lastPart = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "");
     const fileName = lastPart.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim();
     return fileName || parsed.hostname;
@@ -2117,12 +2574,28 @@ function extractTitleFromPdfUrl(url) {
   }
 }
 
+function getCurrentPdfUrl() {
+  return clean(
+    document.querySelector("meta[name='citation_pdf_url']")?.content ||
+    document.querySelector("a[title='Download PDF']")?.href ||
+    document.querySelector("embed[type='application/pdf']")?.src ||
+    document.querySelector("object[type='application/pdf']")?.data ||
+    document.querySelector("iframe[type='application/pdf']")?.src ||
+    document.querySelector("pdf-viewer")?.getAttribute("src") ||
+    document.querySelector("pdf-viewer")?.getAttribute("original-url") ||
+    ""
+  );
+}
+
 function isCurrentPdfPage() {
-  return isPdfLikeUrl(location.href) || Boolean(document.querySelector("embed[type='application/pdf'], pdf-viewer"));
+  return isPdfLikeUrl(location.href) || hasPdfViewerElement();
 }
 
 function isPdfLikeUrl(url) {
-  return /arxiv\.org\/pdf\//i.test(String(url || "")) || /\.pdf(?:[?#]|$)/i.test(String(url || ""));
+  const value = String(url || "");
+  return /arxiv\.org\/pdf\//i.test(value) ||
+    /\.pdf(?:[?#]|$)/i.test(value) ||
+    isKnownDynamicPdfUrl(value);
 }
 
 function createPdfDocumentId(url) {
@@ -2133,6 +2606,10 @@ function createPdfDocumentId(url) {
 function normalizeDocumentUrl(url) {
   try {
     const parsed = new URL(url, location.href);
+    const ieeeNumber = extractIeeeArticleNumber(parsed.href);
+    if (ieeeNumber && isIeeeStampPdfUrl(parsed.href)) {
+      return `https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=${encodeURIComponent(ieeeNumber)}`;
+    }
     parsed.hash = "";
     return parsed.href;
   } catch {
@@ -2140,10 +2617,129 @@ function normalizeDocumentUrl(url) {
   }
 }
 
+async function probeCurrentPdfDocument() {
+  const probe = await sendRuntimeMessage({ type: "probePdfUrl", url: location.href });
+  if (!probe?.isPdf) return null;
+  const pdfUrl = clean(probe.url) || location.href;
+  return {
+    id: createPdfDocumentId(pdfUrl),
+    sourceType: "pdf",
+    title: extractPdfTitle() || extractTitleFromPdfUrl(pdfUrl) || "PDF document",
+    authors: clean(getMeta("citation_author") || document.querySelector("meta[name='dc.creator']")?.content),
+    abstract: clean(getMeta("description") || document.querySelector("meta[property='og:description']")?.content),
+    subjects: "",
+    comments: "",
+    submittedAt: "",
+    paperUpdatedAt: "",
+    pdfUrl,
+    pageUrl: clean(location.href),
+    detectedContentType: clean(probe.contentType)
+  };
+}
+
+function shouldProbePdfUrl(url) {
+  if (isPdfLikeUrl(url) || hasPdfViewerElement()) return false;
+  try {
+    const parsed = new URL(url, location.href);
+    if (!/^https?:$/i.test(parsed.protocol)) return false;
+    const text = `${parsed.hostname} ${parsed.pathname} ${parsed.search}`.toLowerCase();
+    return /(?:pdf|download|fulltext|full-text|stamp|arnumber|getpdf|get-pdf|downloadfile|download-file|bitstream|viewcontent|pdfdownload|pdf-download|epdf)/i
+      .test(text);
+  } catch {
+    return false;
+  }
+}
+
+function hasPdfViewerElement() {
+  return Boolean(document.querySelector("embed[type='application/pdf'], object[type='application/pdf'], iframe[type='application/pdf'], pdf-viewer"));
+}
+
+function isKnownDynamicPdfUrl(url) {
+  return isIeeeStampPdfUrl(url) ||
+    isAcmPdfUrl(url) ||
+    isScienceDirectPdfUrl(url) ||
+    isSpringerPdfUrl(url) ||
+    isWileyPdfUrl(url) ||
+    isResearchGatePdfUrl(url);
+}
+
+function isIeeeStampPdfUrl(url) {
+  try {
+    const parsed = new URL(url, location.href);
+    return /(^|\.)ieeexplore\.ieee\.org$/i.test(parsed.hostname) &&
+      /\/stamp\/stamp\.jsp$/i.test(parsed.pathname) &&
+      Boolean(extractIeeeArticleNumber(parsed.href));
+  } catch {
+    return false;
+  }
+}
+
+function isAcmPdfUrl(url) {
+  try {
+    const parsed = new URL(url, location.href);
+    return /(^|\.)dl\.acm\.org$/i.test(parsed.hostname) &&
+      /\/doi\/pdf\//i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isScienceDirectPdfUrl(url) {
+  try {
+    const parsed = new URL(url, location.href);
+    return /(^|\.)sciencedirect\.com$/i.test(parsed.hostname) &&
+      /\/science\/article\/pii\//i.test(parsed.pathname) &&
+      (/\/pdf\//i.test(parsed.pathname) || /[?&](?:download|via|isDTMRedir)=/i.test(parsed.search));
+  } catch {
+    return false;
+  }
+}
+
+function isSpringerPdfUrl(url) {
+  try {
+    const parsed = new URL(url, location.href);
+    return /(^|\.)link\.springer\.com$/i.test(parsed.hostname) &&
+      /\/content\/pdf\//i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isWileyPdfUrl(url) {
+  try {
+    const parsed = new URL(url, location.href);
+    return /(^|\.)onlinelibrary\.wiley\.com$/i.test(parsed.hostname) &&
+      /\/doi\/pdf(?:direct)?\//i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isResearchGatePdfUrl(url) {
+  try {
+    const parsed = new URL(url, location.href);
+    return /(^|\.)researchgate\.net$/i.test(parsed.hostname) &&
+      /\/publication\/.+\/download/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function extractIeeeArticleNumber(url) {
+  try {
+    const parsed = new URL(url, location.href);
+    return clean(parsed.searchParams.get("arnumber") || "")
+      .replace(/[^\d]/g, "");
+  } catch {
+    const match = String(url || "").match(/[?&]arnumber=(\d+)/i);
+    return match ? match[1] : "";
+  }
+}
+
 function ensureDocumentIdentity(value) {
   if (value?.id) return value;
   if (!isCurrentPdfPage()) return value;
-  const pdfUrl = clean(value?.pdfUrl) || location.href;
+  const pdfUrl = clean(value?.pdfUrl) || getCurrentPdfUrl() || location.href;
   return {
     ...value,
     id: createPdfDocumentId(pdfUrl),

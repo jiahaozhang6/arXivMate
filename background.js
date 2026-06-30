@@ -151,6 +151,8 @@ async function handleMessage(message) {
         contextMode: message.contextMode,
         profileId: message.profileId
       });
+    case "appendPartialConversationTurn":
+      return appendPartialConversationTurn(message);
     case "saveNote":
       return saveNote(message.paper, message.summary, message.mode);
     case "getNote":
@@ -167,6 +169,8 @@ async function handleMessage(message) {
       return openOptionsPage();
     case "checkForUpdate":
       return checkForUpdate({ force: message.force === true });
+    case "probePdfUrl":
+      return probePdfUrl(message.url);
     default:
       return createIgnoredMessageResult(message);
   }
@@ -182,6 +186,78 @@ function createIgnoredMessageResult(message) {
     reason: type ? "unknown-message-type" : "missing-message-type",
     type
   };
+}
+
+async function probePdfUrl(url) {
+  const target = normalizeString(url);
+  if (!isHttpUrl(target)) return { isPdf: false, reason: "unsupported-url" };
+  const head = await requestPdfProbe(target, "HEAD");
+  if (head.isPdf) return head;
+  return requestPdfProbe(target, "GET");
+}
+
+async function requestPdfProbe(url, method) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, {
+      method,
+      redirect: "follow",
+      cache: "no-store",
+      credentials: "include",
+      signal: controller.signal,
+      headers: method === "GET"
+        ? {
+            Accept: "application/pdf,*/*;q=0.8",
+            Range: "bytes=0-2047"
+          }
+        : {
+            Accept: "application/pdf,*/*;q=0.8"
+          }
+    });
+    const contentType = response.headers.get("content-type") || "";
+    const disposition = response.headers.get("content-disposition") || "";
+    const finalUrl = response.url || url;
+    let hasPdfMagic = false;
+    if (method === "GET" && response.ok) {
+      const buffer = await response.arrayBuffer();
+      const prefix = new TextDecoder("latin1").decode(buffer.slice(0, 16));
+      hasPdfMagic = prefix.startsWith("%PDF");
+    }
+    const isPdf = isPdfResponse(contentType, disposition, finalUrl, hasPdfMagic);
+    return {
+      isPdf,
+      url: finalUrl,
+      contentType,
+      contentDisposition: disposition,
+      status: response.status,
+      reason: isPdf ? "pdf-response" : "not-pdf"
+    };
+  } catch (error) {
+    return {
+      isPdf: false,
+      blocked: method === "HEAD",
+      reason: error.name === "AbortError" ? "timeout" : (error.message || String(error))
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function isPdfResponse(contentType, disposition, url, hasPdfMagic) {
+  return /^application\/pdf\b/i.test(normalizeString(contentType)) ||
+    /\.pdf(?:[?#]|$)/i.test(normalizeString(disposition)) ||
+    /\.pdf(?:[?#]|$)/i.test(normalizeString(url)) ||
+    Boolean(hasPdfMagic);
+}
+
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 async function checkForUpdate({ force = false } = {}) {
@@ -582,6 +658,42 @@ async function finishSummarizePaper(prepared, result) {
     contextCapped: prepared.inputBudget.capped,
     generatedAt,
     conversation
+  };
+}
+
+async function appendPartialConversationTurn(message) {
+  const baseSettings = await getSettings();
+  const settings = resolveRequestSettings(baseSettings, message.profileId);
+  const normalizedPaper = normalizePaper(message.paper);
+  const answer = normalizeTextBlock(message.answer);
+  if (!normalizedPaper.id) throw new Error("没有识别到文档 ID，无法保存已停止的对话。");
+  if (!answer) throw new Error("没有可保存的已生成内容。");
+  const generatedAt = new Date().toISOString();
+  const conversation = await appendConversationTurn({
+    paper: normalizedPaper,
+    mode: message.mode || "ask",
+    question: message.question || "",
+    answer,
+    source: normalizeString(message.source) || "partial-generation",
+    settings,
+    inputBudget: normalizePartialInputBudget(message),
+    createdAt: generatedAt,
+    stopped: true
+  });
+  return {
+    text: answer,
+    source: normalizeString(message.source) || "partial-generation",
+    generatedAt,
+    conversation,
+    stopped: true
+  };
+}
+
+function normalizePartialInputBudget(message) {
+  return {
+    estimatedAfterTokens: Number(message.contextTokens) || undefined,
+    limitTokens: Number(message.contextWindow) || undefined,
+    capped: Boolean(message.contextCapped)
   };
 }
 
@@ -1440,7 +1552,7 @@ async function clearConversation(id) {
   return true;
 }
 
-async function appendConversationTurn({ paper, mode, question, answer, source, settings, inputBudget, createdAt }) {
+async function appendConversationTurn({ paper, mode, question, answer, source, settings, inputBudget, createdAt, stopped = false }) {
   const id = paper.id;
   const { conversations = {} } = await chrome.storage.local.get("conversations");
   const previous = conversations[id] || {};
@@ -1474,6 +1586,7 @@ async function appendConversationTurn({ paper, mode, question, answer, source, s
       contextTokens: inputBudget?.estimatedAfterTokens,
       contextWindow: inputBudget?.limitTokens,
       contextCapped: inputBudget?.capped,
+      stopped: Boolean(stopped),
       createdAt: now
     }
   ].slice(-MAX_MESSAGES_PER_CONVERSATION);
@@ -1490,6 +1603,7 @@ async function appendConversationTurn({ paper, mode, question, answer, source, s
     lastQuestion: userText,
     lastAnswer: normalizeTextBlock(answer),
     lastSource: source,
+    lastStopped: Boolean(stopped),
     provider: settings.provider,
     model: settings.model,
     maxOutputTokens: settings.maxOutputTokens,

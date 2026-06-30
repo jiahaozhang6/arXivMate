@@ -15,15 +15,15 @@
 
 ## 中文
 
-> 打开 arXiv，就能总结、追问、深读 PDF，并把每篇论文的阅读历史留在本地。
+> 打开 arXiv、IEEE Xplore 或普通 PDF，就能总结、追问、深读论文，并把每篇文档的阅读历史留在本地。
 
-arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页或 PDF 页时，它会在右侧打开分屏阅读助手，帮助你快速判断论文价值、深读方法与实验、生成学习卡片，并把每篇论文的对话历史保存到本地。
+arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页、arXiv PDF、IEEE Xplore PDF 或普通网页 PDF 时，它会在右侧打开分屏阅读助手，帮助你快速判断论文价值、深读方法与实验、生成学习卡片，并把每篇论文/文档的对话历史保存到本地。
 
 它不是一次性的“摘要按钮”。arXivMate 更像一个轻量研究阅读搭子：它理解当前论文、保留每篇论文的历史对话、支持 DeepSeek/MiniMax/OpenAI-compatible 接口，并参考 [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) 的模型配置、PDF 能力分层、上下文窗口和 paper chat 设计。
 
 ## 当前状态
 
-- 当前版本：`0.1.13`
+- 当前版本：`0.1.14`
 - 安装方式：Chrome 未打包扩展
 - Chrome Web Store：暂未发布
 - 主要语言：支持跟随系统、中文、英文；会同时影响扩展界面和 LLM 输出语言
@@ -33,7 +33,8 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页或
 ## 功能亮点
 
 - **右侧分屏阅读**：打开助手时页面自动让出右侧空间，关闭后恢复原页面。
-- **arXiv abs/PDF + 通用 PDF 支持**：arXiv 摘要页、arXiv PDF 页以及网页上的普通 PDF 都能使用；PDF 页通过 iframe 面板避免 Chrome PDF viewer 抢键盘焦点。
+- **arXiv abs/PDF + 通用论文 PDF 支持**：arXiv 摘要页、arXiv PDF 页、IEEE Xplore PDF、常见出版社动态 PDF 入口以及网页上的普通 PDF 都能使用；PDF 页通过 iframe 面板避免 Chrome PDF viewer 抢键盘焦点。
+- **IEEE Xplore 正文读取**：对 `stamp.jsp?arnumber=...` 这类动态 IEEE PDF 页面，优先读取 IEEE REST 正文接口，避免把非原始 PDF 地址交给 PDF.js。
 - **三种阅读模式**：
   - `速览`：优先读取全文，快速判断问题、方法、结果和局限。
   - `深读`：基于全文分析方法、实验、局限和后续研究点。
@@ -41,10 +42,10 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页或
 - **聊天中选择模型**：论文助手面板内可为当前论文对话直接选择已保存的模型 Profile，不需要回设置页。
 - **针对单篇论文/文档连续对话**：arXiv 按 arXiv ID 保存历史，普通 PDF 按稳定本地文档 ID 保存历史。
 - **本地复盘库**：按日期分组阅读历史，搜索/筛选论文，渲染 Markdown，收藏、归档、复制或导出 Markdown。
-- **PDF 文本抽取**：优先用 PDF.js 从当前 URL/range 抽取正文文本作为上下文，失败时再退回下载解析。
+- **PDF/动态全文抽取**：优先读取站点正文接口或浏览器页面文本层；普通 PDF 再用 PDF.js 从当前 URL/range 抽取正文文本作为上下文。
 - **ar5iv fallback**：PDF 文本不可用时可回退到 ar5iv HTML 正文。
 - **多模型 Profile 管理**：初始化不预置模型；用户可按供应商新增 OpenAI、DeepSeek、MiniMax、Ollama 或自定义 OpenAI-compatible 配置，设置页支持编辑、复制、删除、测试连接和显示/隐藏 API Key。
-- **可中断生成**：模型回复过程中，发送按钮会变成 `停止`，可中断当前会话生成。
+- **可中断生成**：模型回复过程中，发送按钮会变成 `停止`；停止后已生成内容会保留并写入本地对话历史。
 - **中英文界面**：语言设置会同步影响助手面板、设置页、复盘库、popup 和 LLM prompt。
 - **背景主题设置**：助手面板、设置页和复盘库支持跟随系统、浅色、深色和护眼背景。
 - **多页面 GitHub Release 更新提示**：popup、设置页、复盘库和论文助手都会检查最新稳定 Release，提供 `git pull` 和稳定版 ZIP 两种更新方式。
@@ -61,6 +62,8 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页或
 一句话描述：
 
 > arXivMate 是一个本地优先的 Chrome 扩展，让你在 arXiv 页面里用 DeepSeek、MiniMax 或 OpenAI-compatible 模型总结、追问、深读 PDF，并保存每篇论文的本地复盘历史。
+>
+> 虽然名字来自 arXiv，但它也支持 IEEE Xplore 和普通 PDF 阅读场景。
 
 ## 下载与安装
 
@@ -71,13 +74,13 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页或
 推荐普通用户使用这个方法。稳定版 ZIP 来自 GitHub Release，不会随着 `main` 分支变化而变化。
 
 1. 打开 [Releases](https://github.com/jiahaozhang6/arXivMate/releases)
-2. 选择最新稳定 Release，例如 `v0.1.13`
+2. 选择最新稳定 Release，例如 `v0.1.14`
 3. 下载该 Release 的 `Source code (zip)`
-4. 解压 ZIP，得到 `arXivMate-0.1.13` 文件夹
+4. 解压 ZIP，得到 `arXivMate-0.1.14` 文件夹
 5. 打开 Chrome：`chrome://extensions`
 6. 打开右上角 `开发者模式`
 7. 点击 `加载已解压的扩展程序`
-8. 选择解压后的 `arXivMate-0.1.13` 文件夹
+8. 选择解压后的 `arXivMate-0.1.14` 文件夹
 
 也可以直接打开最新稳定 Release：
 
@@ -155,12 +158,12 @@ git merge upstream/main
 当前推荐 Release 描述：
 
 ```text
-arXivMate v0.1.13 - model loading dropdown fix
+arXivMate v0.1.14 - IEEE and dynamic PDF reading
 
-This release fixes model selection after using "Load models" in settings. Loaded provider models now appear in an explicit dropdown next to the model-name input, while manual model entry remains available.
+This release improves IEEE Xplore and dynamic PDF reading. IEEE `stamp.jsp?arnumber=...` pages now prefer the IEEE REST full-text endpoint, non-`.pdf` PDF entry URLs are detected more broadly, and stopped generations keep the already streamed text in local chat history.
 ```
 
-用户侧更新检查以 GitHub Release 为准。发布新版本时请先更新 `manifest.json` 版本号，再创建同版本 tag 和 GitHub Release，例如 `v0.1.13`。README 和插件内下载按钮给普通用户的链接都应指向稳定 Release，而不是 `main` 分支 ZIP。
+用户侧更新检查以 GitHub Release 为准。发布新版本时请先更新 `manifest.json` 版本号，再创建同版本 tag 和 GitHub Release，例如 `v0.1.14`。README 和插件内下载按钮给普通用户的链接都应指向稳定 Release，而不是 `main` 分支 ZIP。
 
 ## 模型配置
 
@@ -378,15 +381,15 @@ MIT. See [LICENSE](./LICENSE).
 
 ## English
 
-> Open arXiv, summarize, ask questions, deep-read PDF text, and keep every paper's reading history local.
+> Open arXiv, IEEE Xplore, or ordinary PDFs, summarize, ask questions, deep-read papers, and keep every document's reading history local.
 
-arXivMate is a local-first Chrome MV3 extension. When you open an arXiv abstract page or PDF page, it opens a split-screen reading assistant on the right side. It helps you summarize a paper, study its method and experiments, generate study cards, and keep a local conversation history for each paper.
+arXivMate is a local-first Chrome MV3 extension. When you open an arXiv abstract page, arXiv PDF, IEEE Xplore PDF, or ordinary web PDF, it opens a split-screen reading assistant on the right side. It helps you summarize a paper, study its method and experiments, generate study cards, and keep a local conversation history for each paper/document.
 
 It is not just a “summarize this paper” button. arXivMate is designed as a lightweight research reading companion: it understands the current paper, keeps per-paper chat history, supports DeepSeek/MiniMax/OpenAI-compatible APIs, and borrows ideas from [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero), including model profiles, PDF capability tiers, context-window budgeting, and paper chat workflows.
 
 ## Status
 
-- Version: `0.1.13`
+- Version: `0.1.14`
 - Installation: unpacked Chrome extension
 - Chrome Web Store: not published yet
 - Language: system default, Chinese, or English; controls both the extension UI and LLM output language
@@ -396,7 +399,8 @@ It is not just a “summarize this paper” button. arXivMate is designed as a l
 ## Highlights
 
 - **Right-side split reading**: the page makes room for the assistant while it is open, then restores the original layout when closed.
-- **arXiv abs/PDF + generic PDF support**: works on arXiv abstract pages, arXiv PDF pages, and ordinary PDF URLs; PDF pages use an iframe panel to avoid Chrome PDF viewer keyboard focus issues.
+- **arXiv abs/PDF + generic research PDF support**: works on arXiv abstract pages, arXiv PDF pages, IEEE Xplore PDFs, common publisher dynamic PDF entries, and ordinary PDF URLs; PDF pages use an iframe panel to avoid Chrome PDF viewer keyboard focus issues.
+- **IEEE Xplore full-text reading**: for dynamic IEEE PDF pages such as `stamp.jsp?arnumber=...`, arXivMate prefers IEEE's REST full-text endpoint instead of sending a non-raw PDF URL to PDF.js.
 - **Three reading modes**:
   - `Quick`: prefer full text to quickly review the problem, method, results, and limitations.
   - `Deep`: use full text to analyze the method, experiments, limitations, and follow-up ideas.
@@ -404,10 +408,10 @@ It is not just a “summarize this paper” button. arXivMate is designed as a l
 - **In-chat model selection**: choose any saved model profile directly in the paper assistant for the current paper chat without going back to settings.
 - **Per-paper/document conversation history**: arXiv papers are keyed by arXiv ID; ordinary PDFs use a stable local document ID.
 - **Review library**: group reading history by date, search/filter papers, render Markdown, favorite/archive items, copy notes, or export Markdown.
-- **PDF text extraction**: PDF.js first extracts text from the current URL/range, then falls back to download-and-parse when needed.
+- **PDF/dynamic full-text extraction**: prefers site full-text endpoints or browser-page text layers; ordinary PDFs then use PDF.js range extraction from the current URL.
 - **ar5iv fallback**: when PDF text extraction fails, arXivMate can fall back to ar5iv HTML text.
 - **Multiple model profile management**: new installs start with no prefilled model profiles; users can add OpenAI, DeepSeek, MiniMax, Ollama, or custom OpenAI-compatible profiles, then edit, duplicate, delete, test connections, and show/hide API keys.
-- **Interruptible generation**: while a model is replying, the Send button becomes `Stop` so the current turn can be interrupted.
+- **Interruptible generation**: while a model is replying, the Send button becomes `Stop`; stopped turns keep already streamed text and save it to local chat history.
 - **Chinese/English UI**: the language setting applies to the assistant panel, settings page, review library, popup, and LLM prompt.
 - **Theme setting**: the assistant panel, settings page, and review library support system, light, dark, and sepia backgrounds.
 - **Multi-page GitHub Release update hint**: the popup, settings page, review library, and paper assistant check the latest stable Release and offer both `git pull` and stable ZIP update paths.
@@ -424,6 +428,8 @@ If you star, fork, or republish this project, these GitHub topics fit well:
 One-line description:
 
 > arXivMate is a local-first Chrome extension that lets you summarize, ask questions, deep-read PDF text, and save local review history for arXiv papers with DeepSeek, MiniMax, or OpenAI-compatible models.
+>
+> Despite the name, it also supports IEEE Xplore and ordinary PDF reading workflows.
 
 ## Download And Install
 
@@ -434,13 +440,13 @@ arXivMate is currently installed through Chrome’s “Load unpacked” flow.
 Recommended for most users. Stable ZIP archives come from GitHub Releases, so they do not move when the `main` branch changes.
 
 1. Open [Releases](https://github.com/jiahaozhang6/arXivMate/releases)
-2. Choose the latest stable Release, for example `v0.1.13`
+2. Choose the latest stable Release, for example `v0.1.14`
 3. Download `Source code (zip)` for that Release
-4. Unzip it to get an `arXivMate-0.1.13` folder
+4. Unzip it to get an `arXivMate-0.1.14` folder
 5. Open Chrome: `chrome://extensions`
 6. Enable `Developer mode`
 7. Click `Load unpacked`
-8. Select the unzipped `arXivMate-0.1.13` folder
+8. Select the unzipped `arXivMate-0.1.14` folder
 
 Direct link for the latest stable Release:
 
@@ -518,12 +524,12 @@ git merge upstream/main
 Recommended Release description:
 
 ```text
-arXivMate v0.1.13 - model loading dropdown fix
+arXivMate v0.1.14 - IEEE and dynamic PDF reading
 
-This release fixes model selection after using "Load models" in settings. Loaded provider models now appear in an explicit dropdown next to the model-name input, while manual model entry remains available.
+This release improves IEEE Xplore and dynamic PDF reading. IEEE `stamp.jsp?arnumber=...` pages now prefer the IEEE REST full-text endpoint, non-`.pdf` PDF entry URLs are detected more broadly, and stopped generations keep the already streamed text in local chat history.
 ```
 
-User-side update checks are based on GitHub Releases. When publishing a new version, update `manifest.json` first, then create a matching tag and GitHub Release such as `v0.1.13`. README links and in-extension download buttons for regular users should point to stable Releases, not the moving `main` branch ZIP.
+User-side update checks are based on GitHub Releases. When publishing a new version, update `manifest.json` first, then create a matching tag and GitHub Release such as `v0.1.14`. README links and in-extension download buttons for regular users should point to stable Releases, not the moving `main` branch ZIP.
 
 ## Model Configuration
 

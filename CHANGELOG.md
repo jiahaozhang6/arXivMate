@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.14 - 2026-06-30
+
+IEEE and dynamic PDF reading release.
+
+- Add IEEE Xplore REST full-text extraction for `stamp.jsp?arnumber=...` papers, avoiding invalid PDF parsing on dynamic IEEE PDF pages.
+- Improve detection for non-`.pdf` PDF entry URLs across IEEE, ACM, Springer, Wiley, ScienceDirect, ResearchGate, and repository download paths.
+- Add lightweight background probing for likely PDF download URLs using response headers and PDF magic bytes.
+- Preserve already streamed assistant text when the user stops generation, and save stopped turns into local paper chat history.
+- Keep stopped assistant turns visibly marked in Chinese and English chat UIs.
+
 ## 0.1.13 - 2026-06-30
 
 Model loading dropdown fix.
