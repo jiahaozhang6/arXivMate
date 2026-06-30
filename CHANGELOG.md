@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4 - 2026-06-30
+
+Stable tag installation guidance.
+
+- Tell users to download stable release/tag ZIP archives instead of the moving `main` branch ZIP.
+- Clarify that `git clone` tracks the latest source and is better for updates or development.
+- Keep update checks and release instructions aligned with GitHub `vX.Y.Z` tags.
+
 ## 0.1.3 - 2026-06-30
 
 Documentation and release metadata.

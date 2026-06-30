@@ -23,7 +23,7 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页或
 
 ## 当前状态
 
-- 当前版本：`0.1.3`
+- 当前版本：`0.1.4`
 - 安装方式：Chrome 未打包扩展
 - Chrome Web Store：暂未发布
 - 主要语言：支持跟随系统、中文、英文；会同时影响扩展界面和 LLM 输出语言
@@ -64,22 +64,28 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页或
 
 目前 arXivMate 通过 Chrome 的“加载已解压扩展程序”安装。
 
-### 方法一：下载 ZIP
+### 方法一：下载稳定 tag 版本
 
-适合只想使用、不想配置 git 的用户。
+推荐普通用户使用这个方法。稳定版 ZIP 来自 GitHub tag，不会随着 `main` 分支变化而变化。
 
-1. 打开 [arXivMate GitHub 仓库](https://github.com/jiahaozhang6/arXivMate)
-2. 点击绿色 `Code` 按钮
-3. 选择 `Download ZIP`
-4. 解压 ZIP，得到 `arXivMate` 文件夹
+1. 打开 [Releases / Tags](https://github.com/jiahaozhang6/arXivMate/tags)
+2. 选择最新稳定版本，例如 `v0.1.4`
+3. 下载该 tag 的 `Source code (zip)`
+4. 解压 ZIP，得到 `arXivMate-0.1.4` 文件夹
 5. 打开 Chrome：`chrome://extensions`
 6. 打开右上角 `开发者模式`
 7. 点击 `加载已解压的扩展程序`
-8. 选择解压后的 `arXivMate` 文件夹
+8. 选择解压后的 `arXivMate-0.1.4` 文件夹
+
+也可以直接下载当前稳定版：
+
+```text
+https://github.com/jiahaozhang6/arXivMate/archive/refs/tags/v0.1.4.zip
+```
 
 ### 方法二：使用 git clone
 
-适合希望和仓库保持更新、参与开发或提交 PR 的用户。
+适合希望跟踪最新源码、参与开发或提交 PR 的用户。`main` 分支可能包含刚合入的新变化；如果你只想稳定使用，优先下载 tag ZIP。
 
 ```bash
 git clone https://github.com/jiahaozhang6/arXivMate.git
@@ -103,7 +109,9 @@ git clone https://github.com/jiahaozhang6/arXivMate.git
 
 ## 保持更新
 
-源码安装的 Chrome 扩展不会像 Chrome Web Store 扩展一样自动更新。推荐使用 git clone 安装，这样更新最简单：
+源码安装的 Chrome 扩展不会像 Chrome Web Store 扩展一样自动更新。arXivMate 的更新提示基于 GitHub tag 版本号；普通用户看到新版本提示后，建议下载新的稳定 tag ZIP 并重新加载扩展。
+
+如果你使用 git clone 安装，可以这样更新到最新源码：
 
 ```bash
 cd arXivMate
@@ -116,7 +124,7 @@ git pull
 2. 点击 arXivMate 卡片上的刷新按钮
 3. 刷新已经打开的 arXiv 页面
 
-如果你是下载 ZIP 安装的，需要重新下载最新 ZIP、解压并替换原文件夹，然后在 `chrome://extensions` 里重新加载扩展。
+如果你是下载稳定 tag ZIP 安装的，需要下载最新 tag ZIP、解压并替换原文件夹，然后在 `chrome://extensions` 里重新加载扩展。
 
 arXivMate 的更新提示基于 GitHub release/tag 版本号：插件会读取仓库最新的 `vX.Y.Z` tag，并和本地 `manifest.json` 版本比较。如果发现新版本，会提示你运行 `git pull` 并重新加载扩展。
 
@@ -133,12 +141,12 @@ git merge upstream/main
 当前推荐 release/tag 描述：
 
 ```text
-arXivMate v0.1.3 - local-first arXiv paper chat assistant
+arXivMate v0.1.4 - local-first arXiv paper chat assistant
 
-This release improves the public README, download/install instructions, and release metadata. arXivMate lets users summarize, ask questions, deep-read PDF text, and keep local per-paper review history directly on arXiv pages using DeepSeek, MiniMax, OpenAI-compatible APIs, Ollama, or custom endpoints.
+This release clarifies stable tag-based downloads and keeps update checks aligned with GitHub vX.Y.Z tags. arXivMate lets users summarize, ask questions, deep-read PDF text, and keep local per-paper review history directly on arXiv pages using DeepSeek, MiniMax, OpenAI-compatible APIs, Ollama, or custom endpoints.
 ```
 
-用户侧更新检查以 GitHub tag 为准。发布新版本时请先更新 `manifest.json` 版本号，再创建同版本 tag，例如 `v0.1.3`。
+用户侧更新检查以 GitHub tag 为准。发布新版本时请先更新 `manifest.json` 版本号，再创建同版本 tag，例如 `v0.1.4`。README 中给普通用户的下载链接也应指向稳定 tag，而不是 `main` 分支 ZIP。
 
 ## 模型配置
 
@@ -341,7 +349,7 @@ It is not just a “summarize this paper” button. arXivMate is designed as a l
 
 ## Status
 
-- Version: `0.1.3`
+- Version: `0.1.4`
 - Installation: unpacked Chrome extension
 - Chrome Web Store: not published yet
 - Language: system default, Chinese, or English; controls both the extension UI and LLM output language
@@ -382,22 +390,28 @@ One-line description:
 
 arXivMate is currently installed through Chrome’s “Load unpacked” flow.
 
-### Option 1: Download ZIP
+### Option 1: Download A Stable Tag
 
-Best for users who want to try the extension without setting up git.
+Recommended for most users. Stable ZIP archives come from GitHub tags, so they do not move when the `main` branch changes.
 
-1. Open the [arXivMate GitHub repository](https://github.com/jiahaozhang6/arXivMate)
-2. Click the green `Code` button
-3. Choose `Download ZIP`
-4. Unzip it to get an `arXivMate` folder
+1. Open [Releases / Tags](https://github.com/jiahaozhang6/arXivMate/tags)
+2. Choose the latest stable version, for example `v0.1.4`
+3. Download `Source code (zip)` for that tag
+4. Unzip it to get an `arXivMate-0.1.4` folder
 5. Open Chrome: `chrome://extensions`
 6. Enable `Developer mode`
 7. Click `Load unpacked`
-8. Select the unzipped `arXivMate` folder
+8. Select the unzipped `arXivMate-0.1.4` folder
+
+Direct link for the current stable version:
+
+```text
+https://github.com/jiahaozhang6/arXivMate/archive/refs/tags/v0.1.4.zip
+```
 
 ### Option 2: Use git clone
 
-Best for users who want easy updates, development, or pull requests.
+Best for users who want to track the latest source, develop features, or open pull requests. The `main` branch may include newly merged changes; if you only want stable usage, prefer the stable tag ZIP above.
 
 ```bash
 git clone https://github.com/jiahaozhang6/arXivMate.git
@@ -421,7 +435,9 @@ Then:
 
 ## Staying Updated
 
-Source-installed Chrome extensions do not update automatically like Chrome Web Store extensions. The recommended install method is `git clone`, because updates are simple:
+Source-installed Chrome extensions do not update automatically like Chrome Web Store extensions. arXivMate update hints are based on GitHub tag versions; when regular users see an update hint, they should download the new stable tag ZIP and reload the extension.
+
+If you installed with git clone, you can update to the latest source with:
 
 ```bash
 cd arXivMate
@@ -434,7 +450,7 @@ Then:
 2. Click reload on the arXivMate extension card
 3. Refresh already-open arXiv pages
 
-If you installed from a ZIP file, download the latest ZIP again, unzip it, replace the old folder, and reload the extension in `chrome://extensions`.
+If you installed from a stable tag ZIP, download the latest tag ZIP, unzip it, replace the old folder, and reload the extension in `chrome://extensions`.
 
 arXivMate update hints are based on GitHub release/tag versions. The extension reads the latest `vX.Y.Z` tag and compares it with the local `manifest.json` version. If a newer version is available, it prompts you to run `git pull` and reload the extension.
 
@@ -451,12 +467,12 @@ git merge upstream/main
 Recommended release/tag description:
 
 ```text
-arXivMate v0.1.3 - local-first arXiv paper chat assistant
+arXivMate v0.1.4 - local-first arXiv paper chat assistant
 
-This release improves the public README, download/install instructions, tag-based update checking, and release metadata. arXivMate lets users summarize, ask questions, deep-read PDF text, and keep local per-paper review history directly on arXiv pages using DeepSeek, MiniMax, OpenAI-compatible APIs, Ollama, or custom endpoints.
+This release clarifies stable tag-based downloads and keeps update checks aligned with GitHub vX.Y.Z tags. arXivMate lets users summarize, ask questions, deep-read PDF text, and keep local per-paper review history directly on arXiv pages using DeepSeek, MiniMax, OpenAI-compatible APIs, Ollama, or custom endpoints.
 ```
 
-User-side update checks are based on GitHub tags. When publishing a new version, update `manifest.json` first, then create a matching tag such as `v0.1.3`.
+User-side update checks are based on GitHub tags. When publishing a new version, update `manifest.json` first, then create a matching tag such as `v0.1.4`. README download links for regular users should point to stable tags, not the moving `main` branch ZIP.
 
 ## Model Configuration
 
