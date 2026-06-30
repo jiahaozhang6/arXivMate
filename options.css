@@ -430,6 +430,26 @@ small {
   font-weight: 800;
 }
 
+.profile-empty {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 22px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.profile-empty strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.profile-empty p {
+  margin: 0;
+}
+
 .profile-card,
 .profile-editor {
   border: 1px solid var(--line);

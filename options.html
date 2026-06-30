@@ -22,7 +22,7 @@
         <section class="section-head">
           <div>
             <h2>模型 Profiles</h2>
-            <p>参考 llm-for-zotero 的配置方式：保留多个模型配置，按任务随时切换当前启用模型。</p>
+            <p>参考 llm-for-zotero 的配置方式：保存多个模型配置；测试通过后可在论文聊天界面按任务选择使用。</p>
           </div>
           <div class="add-profile-controls">
             <select id="add-profile-provider" aria-label="Profile provider"></select>
@@ -53,7 +53,7 @@
 
         <div class="actions">
           <button type="submit" data-i18n="saveSettings">保存设置</button>
-          <button type="button" id="test-button" data-i18n="testModel">测试当前模型</button>
+          <button type="button" id="test-button" data-i18n="testModel">测试所选模型</button>
         </div>
 
         <p id="status" role="status"></p>
@@ -82,7 +82,7 @@
           </div>
           <div>
             <dt data-i18n="version">版本</dt>
-            <dd id="project-version">0.1.6</dd>
+            <dd id="project-version">0.1.7</dd>
           </div>
           <div>
             <dt data-i18n="license">许可证</dt>

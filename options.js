@@ -29,7 +29,7 @@ const PROVIDER_PRESETS = {
   },
   minimax: {
     label: "MiniMax",
-    baseUrl: "https://api.minimax.io/v1",
+    baseUrl: "https://api.minimaxi.com/v1",
     model: "MiniMax-M3"
   },
   ollama: {
@@ -50,7 +50,6 @@ const PROVIDER_PRESETS = {
 
 let settings = null;
 let profiles = [];
-let activeProfileId = "";
 let selectedProfileId = "";
 let revealApiKey = false;
 let currentLanguage = "system";
@@ -63,7 +62,6 @@ addProfileButton.addEventListener("click", () => {
   const profile = createProfile(addProfileProviderSelect.value || "custom");
   profiles.push(profile);
   selectedProfileId = profile.id;
-  activeProfileId = profile.id;
   revealApiKey = false;
   renderProfiles();
 });
@@ -94,11 +92,16 @@ checkUpdateButton.addEventListener("click", () => {
 });
 
 testButton.addEventListener("click", async () => {
+  if (!selectedProfileId) {
+    setStatus(t("selectModelToTest"), true);
+    return;
+  }
   setStatus(t("testing"));
   try {
     await saveCurrentSettings();
     const response = await sendMessage({
       type: "summarizePaper",
+      profileId: selectedProfileId,
       mode: "ask",
       question: t("testQuestion"),
       persist: false,
@@ -122,8 +125,7 @@ async function loadSettings() {
   try {
     settings = await sendMessage({ type: "getSettings" });
     profiles = normalizeProfiles(settings.modelProfiles, settings);
-    activeProfileId = settings.activeProfileId || profiles[0]?.id || "";
-    selectedProfileId = activeProfileId || profiles[0]?.id || "";
+    selectedProfileId = profiles[0]?.id || "";
     form.language.value = normalizeLanguage(settings.language);
     currentLanguage = form.language.value;
     form.appearance.value = normalizeAppearance(settings.appearance);
@@ -142,22 +144,26 @@ async function saveCurrentSettings() {
     ...(settings || {}),
     language: normalizeLanguage(form.language.value),
     appearance: normalizeAppearance(form.appearance.value),
-    activeProfileId,
     modelProfiles: profiles
   };
   settings = await sendMessage({ type: "saveSettings", settings: next });
   profiles = normalizeProfiles(settings.modelProfiles, settings);
-  activeProfileId = settings.activeProfileId || profiles[0]?.id || "";
+  if (!profiles.some((profile) => profile.id === selectedProfileId)) {
+    selectedProfileId = profiles[0]?.id || "";
+  }
   renderProfiles();
 }
 
 function renderProfiles() {
-  if (!profiles.length) profiles = [createProfile("openai")];
-  if (!profiles.some((profile) => profile.id === activeProfileId)) {
-    activeProfileId = profiles[0].id;
+  if (!profiles.length) {
+    selectedProfileId = "";
+    profilesNode.innerHTML = renderEmptyProfiles();
+    testButton.disabled = true;
+    return;
   }
+  testButton.disabled = false;
   if (!profiles.some((profile) => profile.id === selectedProfileId)) {
-    selectedProfileId = activeProfileId || profiles[0].id;
+    selectedProfileId = profiles[0].id;
   }
 
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) || profiles[0];
@@ -183,16 +189,23 @@ function renderProfiles() {
 
 function renderProfileListItem(profile) {
   const isSelected = profile.id === selectedProfileId;
-  const isActive = profile.id === activeProfileId;
   return `
     <button class="profile-list-item ${isSelected ? "is-selected" : ""}" type="button" data-action="select" data-id="${escapeAttr(profile.id)}">
       <span class="profile-list-title">${escapeHtml(profile.name || profile.model || t("untitledProfile"))}</span>
       <span class="profile-list-meta">${escapeHtml(profile.model || t("modelName"))}</span>
       <span class="profile-list-tags">
         <span>${escapeHtml(providerDisplayName(profile.provider))}</span>
-        ${isActive ? `<span>${escapeHtml(t("currentEnabled"))}</span>` : ""}
       </span>
     </button>
+  `;
+}
+
+function renderEmptyProfiles() {
+  return `
+    <div class="profile-empty">
+      <strong>${escapeHtml(t("noModelProfilesTitle"))}</strong>
+      <p>${escapeHtml(t("noModelProfilesBody"))}</p>
+    </div>
   `;
 }
 
@@ -204,9 +217,8 @@ function renderProfileEditor(profile) {
         <strong>${escapeHtml(profile.name || profile.model || t("untitledProfile"))}</strong>
       </div>
       <div class="profile-editor-actions">
-        <button type="button" data-action="set-active" ${profile.id === activeProfileId ? "disabled" : ""}>${escapeHtml(t("setActiveProfile"))}</button>
         <button type="button" data-action="duplicate">${escapeHtml(t("duplicateProfile"))}</button>
-        <button type="button" class="danger" data-action="remove" ${profiles.length <= 1 ? "disabled" : ""}>${escapeHtml(t("remove"))}</button>
+        <button type="button" class="danger" data-action="remove">${escapeHtml(t("remove"))}</button>
       </div>
     </header>
 
@@ -350,13 +362,6 @@ function handleProfileAction(event) {
   const profile = profiles.find((item) => item.id === id);
   if (!profile) return;
 
-  if (action === "set-active") {
-    readSelectedProfileFromDom();
-    activeProfileId = id;
-    renderProfiles();
-    return;
-  }
-
   if (action === "duplicate") {
     readSelectedProfileFromDom();
     const duplicate = {
@@ -366,7 +371,6 @@ function handleProfileAction(event) {
     };
     profiles.push(duplicate);
     selectedProfileId = duplicate.id;
-    activeProfileId = duplicate.id;
     revealApiKey = false;
     renderProfiles();
     return;
@@ -380,11 +384,9 @@ function handleProfileAction(event) {
   }
 
   if (action === "remove") {
-    if (profiles.length <= 1) return;
     if (!confirm(t("confirmRemoveProfile", { name: profile.name || profile.model || t("untitledProfile") }))) return;
     profiles = profiles.filter((item) => item.id !== id);
-    if (activeProfileId === id) activeProfileId = profiles[0]?.id || "";
-    if (selectedProfileId === id) selectedProfileId = activeProfileId || profiles[0]?.id || "";
+    if (selectedProfileId === id) selectedProfileId = profiles[0]?.id || "";
     revealApiKey = false;
     renderProfiles();
   }
@@ -439,6 +441,8 @@ function normalizeProfiles(value, fallbackSettings) {
       };
     });
   }
+  const hasLegacyConfig = Boolean(fallbackSettings?.baseUrl || fallbackSettings?.apiKey || fallbackSettings?.model);
+  if (!hasLegacyConfig) return [];
   const inferredProvider = inferProvider(fallbackSettings.baseUrl);
   return [{
     id: "profile-migrated",

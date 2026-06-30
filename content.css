@@ -606,9 +606,15 @@
   background: var(--alc-accent-strong);
 }
 
+.alc-send.is-stop {
+  border-color: var(--alc-warn);
+  background: var(--alc-warn);
+}
+
 button:disabled,
 textarea:disabled,
-input:disabled {
+input:disabled,
+select:disabled {
   cursor: wait;
   opacity: 0.62;
 }

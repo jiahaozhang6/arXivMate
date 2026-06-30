@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.7 - 2026-06-30
+
+Model selection and cancellation polish.
+
+- Start new installations with an empty model profile list so users create their own profiles.
+- Remove the global active-model setting; saved profiles can be selected per paper chat request.
+- Add a Stop action during streaming generation to interrupt the current conversation turn.
+- Update the MiniMax preset and documentation to `https://api.minimaxi.com/v1`.
+
 ## 0.1.6 - 2026-06-30
 
 Release-based updates.

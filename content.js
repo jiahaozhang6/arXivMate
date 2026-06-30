@@ -17,8 +17,11 @@
   let isPanelOpen = false;
   let useFullTextNext = false;
   let currentSettings = null;
-  let activeModelLabel = "";
+  let selectedProfileId = "";
+  let selectedModelLabel = "";
   let renderTimer = 0;
+  let activeStreamCancel = null;
+  let isGenerating = false;
   let activeAppearance = "system";
   let currentLanguage = "system";
   let systemAppearanceQuery = null;
@@ -100,6 +103,7 @@
   const updateBanner = $(".alc-update-banner");
   const fullTextToggle = $(".alc-fulltext");
   const modelSelect = $(".alc-model-select");
+  const sendButton = $(".alc-send");
 
   applyLanguage(currentLanguage);
   installPanelEventGuards();
@@ -130,10 +134,16 @@
     useFullTextNext = fullTextToggle.checked;
     setStatus(useFullTextNext ? t("fullTextOn") : t("fullTextOff"));
   });
-  modelSelect.addEventListener("change", switchActiveModel);
+  modelSelect.addEventListener("change", switchChatModel);
 
   shadow.querySelectorAll("[data-mode]").forEach((button) => {
-    button.addEventListener("click", () => runTurn(button.dataset.mode));
+    button.addEventListener("click", () => {
+      if (button.classList.contains("alc-send") && isGenerating) {
+        stopCurrentGeneration();
+        return;
+      }
+      runTurn(button.dataset.mode);
+    });
   });
   if (!isEmbeddedPanel) {
     window.addEventListener("resize", () => {
@@ -151,6 +161,10 @@
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
+      if (isGenerating) {
+        stopCurrentGeneration();
+        return;
+      }
       runTurn("ask");
       return;
     }
@@ -372,6 +386,12 @@
   }
 
   async function runTurn(mode) {
+    if (isGenerating) return;
+    if (!getSelectedProfile()) {
+      setStatus(t("noModelSelected"), true);
+      renderModelSelect();
+      return;
+    }
     const userText = mode === "ask" ? input.value.trim() : modeToUserText(mode, currentLanguage);
     if (mode === "ask" && !userText) {
       setStatus(t("emptyQuestion"), true);
@@ -394,7 +414,8 @@
         paper,
         mode,
         question: userText,
-        contextMode
+        contextMode,
+        profileId: selectedProfileId
       }, {
         onMeta(meta) {
           const source = meta?.source ? ` · ${meta.source}` : "";
@@ -414,7 +435,9 @@
     } catch (error) {
       renderConversation(currentConversation);
       if (mode === "ask") input.value = userText;
-      if (isExtensionContextInvalidated(error)) {
+      if (error?.name === "AbortError" || error?.message === "generation-aborted") {
+        setStatus(t("generationStopped"));
+      } else if (isExtensionContextInvalidated(error)) {
         showExtensionReloadNotice(error);
       } else {
         setStatus(error.message || String(error), true);
@@ -439,14 +462,16 @@
     try {
       const settings = await sendMessage({ type: "getSettings" });
       currentSettings = settings;
-      activeModelLabel = buildActiveModelLabel(settings);
+      reconcileSelectedProfile();
+      selectedModelLabel = buildSelectedModelLabel();
       applyLanguage(settings.language);
       applyAppearance(settings.appearance);
       renderModelSelect();
       renderUpdateBanner();
     } catch {
       currentSettings = null;
-      activeModelLabel = "";
+      selectedProfileId = "";
+      selectedModelLabel = "";
       applyLanguage("system");
       applyAppearance("system");
       renderModelSelect();
@@ -462,7 +487,8 @@
         applyLanguage(changes.settings.newValue?.language);
         applyAppearance(changes.settings.newValue?.appearance);
         currentSettings = changes.settings.newValue || currentSettings;
-        activeModelLabel = buildActiveModelLabel(currentSettings);
+        reconcileSelectedProfile();
+        selectedModelLabel = buildSelectedModelLabel();
         renderModelSelect();
         renderUpdateBanner();
       });
@@ -531,49 +557,47 @@
   function renderModelSelect() {
     if (!modelSelect) return;
     const profiles = Array.isArray(currentSettings?.modelProfiles) ? currentSettings.modelProfiles : [];
-    const activeId = currentSettings?.activeProfileId || "";
+    reconcileSelectedProfile();
     modelSelect.innerHTML = profiles.length
-      ? profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === activeId ? "selected" : ""}>${escapeHtml(formatProfileOption(profile))}</option>`).join("")
-      : `<option value="">${escapeHtml(currentSettings?.model || t("modelName"))}</option>`;
-    modelSelect.disabled = profiles.length <= 1;
+      ? profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === selectedProfileId ? "selected" : ""}>${escapeHtml(formatProfileOption(profile))}</option>`).join("")
+      : `<option value="">${escapeHtml(t("noModelProfilesShort"))}</option>`;
+    modelSelect.disabled = isGenerating || profiles.length === 0;
+    selectedModelLabel = buildSelectedModelLabel();
   }
 
-  async function switchActiveModel(event) {
+  function switchChatModel(event) {
     const nextProfileId = event.target.value;
-    if (!nextProfileId || nextProfileId === currentSettings?.activeProfileId) return;
-    const previousProfileId = currentSettings?.activeProfileId || "";
-    modelSelect.disabled = true;
-    try {
-      const nextSettings = await sendMessage({
-        type: "saveSettings",
-        settings: {
-          ...(currentSettings || {}),
-          activeProfileId: nextProfileId
-        }
-      });
-      currentSettings = nextSettings;
-      activeModelLabel = buildActiveModelLabel(nextSettings);
-      applyLanguage(nextSettings.language);
-      applyAppearance(nextSettings.appearance);
-      renderModelSelect();
-      setStatus(t("modelSwitched", { model: activeModelDisplayName(nextSettings) }));
-    } catch (error) {
-      if (previousProfileId) modelSelect.value = previousProfileId;
-      showExtensionReloadNotice(error);
-    } finally {
-      renderModelSelect();
+    if (!nextProfileId || nextProfileId === selectedProfileId) return;
+    selectedProfileId = nextProfileId;
+    selectedModelLabel = buildSelectedModelLabel();
+    renderModelSelect();
+    setStatus(t("modelSelected", { model: selectedProfileDisplayName() }));
+  }
+
+  function reconcileSelectedProfile() {
+    const profiles = Array.isArray(currentSettings?.modelProfiles) ? currentSettings.modelProfiles : [];
+    if (!profiles.length) {
+      selectedProfileId = "";
+      return;
+    }
+    if (!profiles.some((profile) => profile.id === selectedProfileId)) {
+      selectedProfileId = profiles[0].id;
     }
   }
 
-  function buildActiveModelLabel(settings) {
-    const display = activeModelDisplayName(settings);
+  function getSelectedProfile() {
+    const profiles = Array.isArray(currentSettings?.modelProfiles) ? currentSettings.modelProfiles : [];
+    return profiles.find((profile) => profile.id === selectedProfileId) || null;
+  }
+
+  function buildSelectedModelLabel() {
+    const display = selectedProfileDisplayName();
     return display ? ` · ${display}` : "";
   }
 
-  function activeModelDisplayName(settings) {
-    const profiles = Array.isArray(settings?.modelProfiles) ? settings.modelProfiles : [];
-    const active = profiles.find((profile) => profile.id === settings?.activeProfileId);
-    return active?.name || active?.model || settings?.model || "";
+  function selectedProfileDisplayName() {
+    const profile = getSelectedProfile();
+    return profile?.name || profile?.model || "";
   }
 
   function formatProfileOption(profile) {
@@ -588,9 +612,9 @@
       renderConversation(currentConversation);
       if (currentConversation?.messageCount) {
         currentResult = findLastAssistantText(currentConversation);
-        setStatus(t("loadedHistory", { count: currentConversation.turnCount || 0, model: activeModelLabel }));
+        setStatus(t("loadedHistory", { count: currentConversation.turnCount || 0, model: selectedModelLabel }));
       } else {
-        setStatus(t("defaultModeHint", { model: activeModelLabel }));
+        setStatus(t("defaultModeHint", { model: selectedModelLabel }));
       }
     } catch (error) {
       setStatus(error.message || String(error), true);
@@ -714,11 +738,26 @@
   }
 
   function setBusy(isBusy) {
-    shadow.querySelectorAll("button, textarea, input").forEach((node) => {
+    isGenerating = Boolean(isBusy);
+    shadow.querySelectorAll("button, textarea, input, select").forEach((node) => {
       if (node.classList.contains("alc-close") || node.classList.contains("alc-fab")) return;
       if (node.classList.contains("alc-review") || node.classList.contains("alc-copy")) return;
+      if (node.classList.contains("alc-send")) {
+        node.disabled = false;
+        node.textContent = isBusy ? t("stop") : t("send");
+        node.classList.toggle("is-stop", isBusy);
+        return;
+      }
       node.disabled = isBusy;
     });
+    if (!isBusy) {
+      activeStreamCancel = null;
+      renderModelSelect();
+      if (sendButton) {
+        sendButton.textContent = t("send");
+        sendButton.classList.remove("is-stop");
+      }
+    }
     panel.classList.toggle("is-busy", isBusy);
   }
 
@@ -778,21 +817,52 @@
   function sendStreamMessage(payload, callbacks = {}) {
     return new Promise((resolve, reject) => {
       let settled = false;
+      let cancelled = false;
       let latestText = "";
       let port;
+      const abort = () => {
+        cancelled = true;
+        if (!settled) {
+          settled = true;
+          reject(Object.assign(new Error("generation-aborted"), { name: "AbortError" }));
+        }
+        try {
+          port?.disconnect();
+        } catch {}
+      };
       try {
         if (!isRuntimeAvailable()) throw createExtensionContextError();
         port = chrome.runtime.connect({ name: "alc-stream" });
+        activeStreamCancel = abort;
       } catch (error) {
         if (isExtensionContextInvalidated(error)) {
           reject(error);
           return;
         }
-        sendMessage(payload).then(resolve, reject);
+        let fallbackCancelled = false;
+        activeStreamCancel = () => {
+          fallbackCancelled = true;
+          if (!settled) {
+            settled = true;
+            reject(Object.assign(new Error("generation-aborted"), { name: "AbortError" }));
+          }
+        };
+        sendMessage(payload).then((data) => {
+          if (fallbackCancelled) return;
+          settled = true;
+          activeStreamCancel = null;
+          resolve(data);
+        }, (sendError) => {
+          if (fallbackCancelled) return;
+          settled = true;
+          activeStreamCancel = null;
+          reject(sendError);
+        });
         return;
       }
 
       port.onMessage.addListener((message) => {
+        if (cancelled) return;
         if (message?.type === "meta") {
           callbacks.onMeta?.(message);
           return;
@@ -804,6 +874,7 @@
         }
         if (message?.type === "done") {
           settled = true;
+          activeStreamCancel = null;
           resolve(message.data);
           try {
             port.disconnect();
@@ -812,6 +883,7 @@
         }
         if (message?.type === "error") {
           settled = true;
+          activeStreamCancel = null;
           reject(new Error(message.error || "流式请求失败。"));
           try {
             port.disconnect();
@@ -820,6 +892,7 @@
       });
 
       port.onDisconnect.addListener(() => {
+        if (cancelled) return;
         if (!settled) {
           reject(new Error(getRuntimeLastErrorMessage() || "流式连接已断开，请重试。"));
         }
@@ -831,9 +904,21 @@
           type: "summarizePaperStream"
         });
       } catch (error) {
+        activeStreamCancel = null;
         reject(error);
       }
     });
+  }
+
+  function stopCurrentGeneration() {
+    if (!activeStreamCancel) return;
+    activeStreamCancel();
+    activeStreamCancel = null;
+    flushScheduledRender();
+    renderConversation(currentConversation);
+    setBusy(false);
+    setStatus(t("generationStopped"));
+    input.focus();
   }
 
   function isPdfPage() {

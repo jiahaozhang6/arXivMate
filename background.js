@@ -1,25 +1,17 @@
 const DEFAULT_SETTINGS = {
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  apiKey: "",
-  model: "gpt-4o-mini",
   language: "system",
-  appearance: "system",
-  temperature: 0.2,
-  maxContextChars: 14000,
-  useAr5iv: true
+  appearance: "system"
 };
 
-const DEFAULT_PROFILE_ID = "profile-openai";
 const DEFAULT_PROFILE_SETTINGS = {
-  temperature: DEFAULT_SETTINGS.temperature,
-  maxContextChars: DEFAULT_SETTINGS.maxContextChars,
+  temperature: 0.2,
+  maxContextChars: 14000,
   maxOutputTokens: 1600,
   inputTokenCap: 32000,
   historyTurns: 4,
   historyMessageChars: 1800,
   defaultContextMode: "fast",
-  useAr5iv: DEFAULT_SETTINGS.useAr5iv
+  useAr5iv: true
 };
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const INPUT_CAP_SAFETY_RATIO = 0.9;
@@ -58,73 +50,6 @@ const PROVIDER_PRESETS = {
     model: ""
   }
 };
-
-const DEFAULT_MODEL_PROFILES = [
-  {
-    id: DEFAULT_PROFILE_ID,
-    name: "OpenAI fast",
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    apiKey: "",
-    model: "gpt-4o-mini",
-    temperature: 0.2,
-    maxContextChars: 14000,
-    maxOutputTokens: 1600,
-    inputTokenCap: 32000,
-    historyTurns: 4,
-    historyMessageChars: 1800,
-    defaultContextMode: "fast",
-    useAr5iv: true
-  },
-  {
-    id: "profile-deepseek",
-    name: "DeepSeek",
-    provider: "deepseek",
-    baseUrl: "https://api.deepseek.com",
-    apiKey: "",
-    model: "deepseek-v4-flash",
-    temperature: 0.2,
-    maxContextChars: 14000,
-    maxOutputTokens: 1800,
-    inputTokenCap: 128000,
-    historyTurns: 4,
-    historyMessageChars: 1800,
-    defaultContextMode: "fast",
-    useAr5iv: true
-  },
-  {
-    id: "profile-minimax",
-    name: "MiniMax",
-    provider: "minimax",
-    baseUrl: "https://api.minimax.io/v1",
-    apiKey: "",
-    model: "MiniMax-M3",
-    temperature: 0.2,
-    maxContextChars: 14000,
-    maxOutputTokens: 1800,
-    inputTokenCap: 128000,
-    historyTurns: 4,
-    historyMessageChars: 1800,
-    defaultContextMode: "fast",
-    useAr5iv: true
-  },
-  {
-    id: "profile-ollama",
-    name: "Ollama local",
-    provider: "ollama",
-    baseUrl: "http://localhost:11434/v1",
-    apiKey: "",
-    model: "llama3.1",
-    temperature: 0.2,
-    maxContextChars: 12000,
-    maxOutputTokens: 1200,
-    inputTokenCap: 16000,
-    historyTurns: 3,
-    historyMessageChars: 1200,
-    defaultContextMode: "fast",
-    useAr5iv: true
-  }
-];
 
 chrome.runtime.onInstalled.addListener(async () => {
   const { settings } = await chrome.storage.sync.get("settings");
@@ -192,7 +117,8 @@ async function handleMessage(message) {
         mode: message.mode,
         question: message.question,
         persist: message.persist !== false,
-        contextMode: message.contextMode
+        contextMode: message.contextMode,
+        profileId: message.profileId
       });
     case "saveNote":
       return saveNote(message.paper, message.summary, message.mode);
@@ -294,26 +220,23 @@ async function getSettings() {
 
 async function saveSettings(settings) {
   const modelProfiles = normalizeModelProfiles(settings?.modelProfiles, settings);
-  const activeProfile = pickActiveProfile(modelProfiles, settings?.activeProfileId);
   const next = {
     ...DEFAULT_SETTINGS,
-    ...(settings || {}),
     language: normalizeLanguage(settings?.language),
     appearance: normalizeAppearance(settings?.appearance),
-    activeProfileId: activeProfile.id,
-    modelProfiles,
-    ...flattenProfile(activeProfile)
+    modelProfiles
   };
 
-  if (!activeProfile.baseUrl) throw new Error("请填写当前模型配置的 API Base URL。");
-  if (!activeProfile.model) throw new Error("请填写当前模型配置的模型名称。");
+  for (const profile of modelProfiles) {
+    validateModelProfile(profile);
+  }
 
   await chrome.storage.sync.set({ settings: next });
   return next;
 }
 
-async function summarizePaper({ paper, mode = "quick", question = "", persist = true, contextMode = "auto" }) {
-  const prepared = await prepareSummarizePaper({ paper, mode, question, persist, contextMode });
+async function summarizePaper({ paper, mode = "quick", question = "", persist = true, contextMode = "auto", profileId = "" }) {
+  const prepared = await prepareSummarizePaper({ paper, mode, question, persist, contextMode, profileId });
   const result = await callChatCompletions(prepared.settings, prepared.messages);
   return finishSummarizePaper(prepared, result);
 }
@@ -324,7 +247,8 @@ async function streamSummarizePaper(message, port, signal) {
     mode: message.mode,
     question: message.question,
     persist: message.persist !== false,
-    contextMode: message.contextMode
+    contextMode: message.contextMode,
+    profileId: message.profileId
   });
   postPort(port, {
     type: "meta",
@@ -349,10 +273,9 @@ async function streamSummarizePaper(message, port, signal) {
   return finishSummarizePaper(prepared, result);
 }
 
-async function prepareSummarizePaper({ paper, mode = "quick", question = "", persist = true, contextMode = "auto" }) {
-  const settings = await getSettings();
-  if (!settings.baseUrl) throw new Error("请先在插件设置里填写 LLM API Base URL。");
-  if (!settings.model) throw new Error("请先在插件设置里填写模型名称。");
+async function prepareSummarizePaper({ paper, mode = "quick", question = "", persist = true, contextMode = "auto", profileId = "" }) {
+  const baseSettings = await getSettings();
+  const settings = resolveRequestSettings(baseSettings, profileId);
 
   const normalizedPaper = normalizePaper(paper);
   const paperContext = await getPaperContext(settings, normalizedPaper, resolveContextMode(mode, contextMode));
@@ -973,7 +896,7 @@ async function fetchAr5ivText(arxivId, maxChars) {
   }
   const html = await response.text();
   const text = htmlToReadableText(html);
-  return text.slice(0, Math.max(4000, Number(maxChars) || DEFAULT_SETTINGS.maxContextChars));
+  return text.slice(0, Math.max(4000, Number(maxChars) || DEFAULT_PROFILE_SETTINGS.maxContextChars));
 }
 
 async function fetchPdfText(pdfUrl, maxChars) {
@@ -998,7 +921,7 @@ async function extractPdfText(bytes, maxChars) {
   const pdf = await task.promise;
   const parts = [];
   const pageLimit = Math.min(pdf.numPages, PDF_EXTRACT_MAX_PAGES);
-  const charLimit = Math.max(4000, Number(maxChars) || DEFAULT_SETTINGS.maxContextChars);
+  const charLimit = Math.max(4000, Number(maxChars) || DEFAULT_PROFILE_SETTINGS.maxContextChars);
 
   for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
@@ -1355,28 +1278,20 @@ function normalizePaper(paper = {}) {
 }
 
 function createDefaultSettings() {
-  const activeProfile = DEFAULT_MODEL_PROFILES[0];
   return {
     ...DEFAULT_SETTINGS,
-    activeProfileId: activeProfile.id,
-    modelProfiles: DEFAULT_MODEL_PROFILES.map((profile) => ({ ...profile })),
-    ...flattenProfile(activeProfile)
+    modelProfiles: []
   };
 }
 
 function normalizeSettings(settings) {
   const modelProfiles = normalizeModelProfiles(settings?.modelProfiles, settings);
-  const activeProfile = pickActiveProfile(modelProfiles, settings?.activeProfileId);
-  const merged = {
+  return {
     ...DEFAULT_SETTINGS,
-    ...(settings || {}),
     language: normalizeLanguage(settings?.language),
     appearance: normalizeAppearance(settings?.appearance),
-    activeProfileId: activeProfile.id,
-    modelProfiles,
-    ...flattenProfile(activeProfile)
+    modelProfiles
   };
-  return merged;
 }
 
 function normalizeModelProfiles(value, legacySettings = {}) {
@@ -1392,9 +1307,8 @@ function normalizeModelProfiles(value, legacySettings = {}) {
       normalizeString(legacySettings?.apiKey) ||
       normalizeString(legacySettings?.model)
     );
-    profiles = DEFAULT_MODEL_PROFILES.map((profile) => ({ ...profile }));
     if (hasLegacyConfig) {
-      profiles.unshift(normalizeModelProfile({
+      profiles = [normalizeModelProfile({
         id: "profile-migrated",
         name: "Migrated model",
         provider,
@@ -1404,7 +1318,7 @@ function normalizeModelProfiles(value, legacySettings = {}) {
         temperature: legacySettings?.temperature,
         maxContextChars: legacySettings?.maxContextChars,
         useAr5iv: legacySettings?.useAr5iv
-      }));
+      })].filter(Boolean);
     }
   }
 
@@ -1448,9 +1362,25 @@ function normalizeModelProfile(profile) {
   };
 }
 
-function pickActiveProfile(profiles, activeProfileId) {
-  const id = normalizeString(activeProfileId);
-  return profiles.find((profile) => profile.id === id) || profiles[0] || DEFAULT_MODEL_PROFILES[0];
+function resolveRequestSettings(settings, profileId) {
+  const profiles = Array.isArray(settings?.modelProfiles) ? settings.modelProfiles : [];
+  if (!profiles.length) {
+    throw new Error("还没有模型配置。请先打开 arXivMate 设置，新建并测试一个模型。");
+  }
+  const id = normalizeString(profileId);
+  const profile = profiles.find((item) => item.id === id) || profiles[0];
+  validateModelProfile(profile);
+  return {
+    ...settings,
+    ...flattenProfile(profile),
+    requestProfileId: profile.id,
+    requestProfileName: profile.name
+  };
+}
+
+function validateModelProfile(profile) {
+  if (!profile?.baseUrl) throw new Error("请填写模型配置的 API Base URL。");
+  if (!profile?.model) throw new Error("请填写模型配置的模型名称。");
 }
 
 function flattenProfile(profile) {
