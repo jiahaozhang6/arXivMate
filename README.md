@@ -12,7 +12,7 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 论文摘要
 
 ## 当前状态
 
-- 当前版本：`0.1.0`
+- 当前版本：`0.1.1`
 - 安装方式：Chrome 未打包扩展
 - Chrome Web Store：暂未发布
 - 主要语言：支持跟随系统、中文、英文；会同时影响扩展界面和 LLM 输出语言
@@ -256,6 +256,10 @@ git push
 
 Chrome 重新加载扩展后，已经打开的页面里可能还残留旧的 content script。刷新当前 arXiv 页面即可。arXivMate 已经对大多数 runtime 调用做了防护，但开发期刷新页面仍然是最稳的做法。
 
+### 为什么 Chrome 扩展页里出现 `Error: Unknown message type.`？
+
+这是旧版本 background service worker 在收到未知 runtime message 时抛出的错误。`0.1.1` 起未知消息会被安全忽略，不会再污染扩展错误页。如果你仍然看到这个报错，请先在 `chrome://extensions` 点击 arXivMate 的刷新按钮，再刷新已经打开的 arXiv 页面，确保 Chrome 没有继续运行旧 service worker。
+
 ### 为什么不直接上传 PDF 给 DeepSeek 或 MiniMax？
 
 OpenAI-compatible chat endpoint 不一定支持二进制 PDF 输入。当前版本使用 PDF.js 抽取文本作为上下文，更稳定，也更容易控制隐私和上下文窗口。
@@ -288,7 +292,7 @@ It is not just a “summarize this paper” button. arXivMate is designed as a l
 
 ## Status
 
-- Version: `0.1.0`
+- Version: `0.1.1`
 - Installation: unpacked Chrome extension
 - Chrome Web Store: not published yet
 - Language: system default, Chinese, or English; controls both the extension UI and LLM output language
@@ -531,6 +535,10 @@ git push
 ### Why do I see `Extension context invalidated` after reloading the extension?
 
 After Chrome reloads an extension, already-open pages may still contain the old content script. Refresh the current arXiv page. arXivMate guards most runtime calls, but refreshing the page is still the most reliable workflow during development.
+
+### Why do I see `Error: Unknown message type.` in Chrome's extension errors?
+
+Older background service workers threw when they received an unknown runtime message. Since `0.1.1`, unknown messages are safely ignored and no longer pollute the extension error page. If the error still appears, click reload on the arXivMate card in `chrome://extensions`, then refresh any already-open arXiv pages so Chrome stops running the old service worker.
 
 ### Why not upload PDFs directly to DeepSeek or MiniMax?
 

@@ -7,6 +7,7 @@ const updateBox = document.querySelector(".update-box");
 const updateStatusNode = document.querySelector("#update-status");
 const updateCheckedAtNode = document.querySelector("#update-checked-at");
 const checkUpdateButton = document.querySelector("#check-update");
+const projectVersionNode = document.querySelector("#project-version");
 const I18N = window.ArxivMateI18n;
 
 const PROVIDER_PRESETS = {
@@ -42,6 +43,7 @@ let profiles = [];
 let activeProfileId = "";
 let currentLanguage = "system";
 
+syncProjectVersion();
 loadSettings();
 
 addProfileButton.addEventListener("click", () => {
@@ -428,6 +430,11 @@ function applyLanguage(value) {
 
 function t(key, vars = {}) {
   return I18N.t(currentLanguage, key, vars);
+}
+
+function syncProjectVersion() {
+  if (!projectVersionNode) return;
+  projectVersionNode.textContent = chrome.runtime.getManifest().version;
 }
 
 async function checkForUpdate(force) {
