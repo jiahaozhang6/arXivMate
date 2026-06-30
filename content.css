@@ -237,6 +237,37 @@
   flex-wrap: wrap;
 }
 
+.alc-model-picker {
+  flex: 1 1 150px;
+  min-width: 140px;
+  display: grid;
+  gap: 3px;
+}
+
+.alc-model-picker span {
+  color: var(--alc-muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.alc-model-select {
+  width: 100%;
+  min-height: 28px;
+  border: 1px solid var(--alc-line);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: var(--alc-control);
+  color: var(--alc-text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.alc-model-select:focus {
+  outline: 2px solid var(--alc-focus);
+  border-color: var(--alc-accent);
+}
+
 .alc-shortcuts {
   overflow-x: auto;
   scrollbar-width: thin;

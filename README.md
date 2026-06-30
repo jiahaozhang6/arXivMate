@@ -38,6 +38,7 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页或
   - `速览`：用摘要和元数据快速判断是否值得读。
   - `深读`：优先读取 PDF 正文，分析问题、方法、实验、局限和后续研究点。
   - `学习卡`：生成阅读路线、主动回忆题和 Anki 风格卡片。
+- **聊天中切换模型**：论文助手面板内可直接切换当前模型 Profile，不需要回设置页。
 - **针对单篇论文连续对话**：每篇论文按 arXiv ID 保存独立对话历史。
 - **本地复盘库**：按日期分组阅读历史，搜索/筛选论文，渲染 Markdown，收藏、归档、复制或导出 Markdown。
 - **PDF 文本抽取**：后台下载当前 arXiv PDF，用 PDF.js 抽取正文文本作为上下文。
@@ -374,6 +375,7 @@ It is not just a “summarize this paper” button. arXivMate is designed as a l
   - `Quick`: use metadata and abstract to quickly decide whether a paper is worth reading.
   - `Deep`: extract PDF text when possible and analyze the problem, method, experiments, limitations, and follow-up ideas.
   - `Study`: generate a reading plan, active-recall questions, and Anki-style cards.
+- **In-chat model switching**: switch the active model profile directly in the paper assistant without going back to settings.
 - **Per-paper conversation history**: each paper keeps an independent local chat history by arXiv ID.
 - **Review library**: group reading history by date, search/filter papers, render Markdown, favorite/archive items, copy notes, or export Markdown.
 - **PDF text extraction**: the background service worker downloads the current arXiv PDF and extracts text with bundled PDF.js.

@@ -8,6 +8,7 @@ Stable update prompts.
 - Show two update methods when a new version is available: `git pull` for cloned installs, or stable ZIP download for regular users.
 - Show update reminders across the popup, settings page, review library, arXiv assistant panel, and PDF iframe panel.
 - Redesign model profile management with a profile list, focused editor, provider presets, duplicate, delete, set-active, and API key visibility controls.
+- Add an in-chat model switcher so paper conversations can change the active model without leaving the arXiv assistant.
 - Restrict update checks to stable `vX.Y.Z` tags and ignore prerelease-style tags.
 - Document the updated two-path upgrade workflow in both Chinese and English README sections.
 

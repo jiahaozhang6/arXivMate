@@ -16,6 +16,7 @@
   let currentMode = "quick";
   let isPanelOpen = false;
   let useFullTextNext = false;
+  let currentSettings = null;
   let activeModelLabel = "";
   let renderTimer = 0;
   let activeAppearance = "system";
@@ -58,6 +59,10 @@
           <button data-mode="study" type="button" data-i18n="study">学习卡</button>
         </div>
         <div class="alc-tools">
+          <label class="alc-model-picker">
+            <span data-i18n="chatModel">模型</span>
+            <select class="alc-model-select" title="切换当前聊天模型" data-i18n-title="switchChatModel"></select>
+          </label>
           <label class="alc-toggle" title="下一次请求优先抽取当前 PDF 文本，失败时再尝试 ar5iv，速度会慢一些" data-i18n-title="fullTextTitle">
             <input class="alc-fulltext" type="checkbox">
             <span data-i18n="fullText">全文</span>
@@ -94,6 +99,7 @@
   const chat = $(".alc-chat");
   const updateBanner = $(".alc-update-banner");
   const fullTextToggle = $(".alc-fulltext");
+  const modelSelect = $(".alc-model-select");
 
   applyLanguage(currentLanguage);
   installPanelEventGuards();
@@ -124,6 +130,7 @@
     useFullTextNext = fullTextToggle.checked;
     setStatus(useFullTextNext ? t("fullTextOn") : t("fullTextOff"));
   });
+  modelSelect.addEventListener("change", switchActiveModel);
 
   shadow.querySelectorAll("[data-mode]").forEach((button) => {
     button.addEventListener("click", () => runTurn(button.dataset.mode));
@@ -431,14 +438,18 @@
   async function loadInitialState() {
     try {
       const settings = await sendMessage({ type: "getSettings" });
-      activeModelLabel = settings.model ? ` · ${settings.model}` : "";
+      currentSettings = settings;
+      activeModelLabel = buildActiveModelLabel(settings);
       applyLanguage(settings.language);
       applyAppearance(settings.appearance);
+      renderModelSelect();
       renderUpdateBanner();
     } catch {
+      currentSettings = null;
       activeModelLabel = "";
       applyLanguage("system");
       applyAppearance("system");
+      renderModelSelect();
       renderUpdateBanner();
     }
     await loadConversation();
@@ -450,7 +461,9 @@
         if (areaName !== "sync" || !changes.settings) return;
         applyLanguage(changes.settings.newValue?.language);
         applyAppearance(changes.settings.newValue?.appearance);
-        activeModelLabel = changes.settings.newValue?.model ? ` · ${changes.settings.newValue.model}` : "";
+        currentSettings = changes.settings.newValue || currentSettings;
+        activeModelLabel = buildActiveModelLabel(currentSettings);
+        renderModelSelect();
         renderUpdateBanner();
       });
     } catch {
@@ -500,6 +513,7 @@
     });
     renderPaperHeader();
     renderConversation(currentConversation);
+    renderModelSelect();
   }
 
   function t(key, vars = {}) {
@@ -512,6 +526,60 @@
       language: currentLanguage,
       compact: true
     });
+  }
+
+  function renderModelSelect() {
+    if (!modelSelect) return;
+    const profiles = Array.isArray(currentSettings?.modelProfiles) ? currentSettings.modelProfiles : [];
+    const activeId = currentSettings?.activeProfileId || "";
+    modelSelect.innerHTML = profiles.length
+      ? profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === activeId ? "selected" : ""}>${escapeHtml(formatProfileOption(profile))}</option>`).join("")
+      : `<option value="">${escapeHtml(currentSettings?.model || t("modelName"))}</option>`;
+    modelSelect.disabled = profiles.length <= 1;
+  }
+
+  async function switchActiveModel(event) {
+    const nextProfileId = event.target.value;
+    if (!nextProfileId || nextProfileId === currentSettings?.activeProfileId) return;
+    const previousProfileId = currentSettings?.activeProfileId || "";
+    modelSelect.disabled = true;
+    try {
+      const nextSettings = await sendMessage({
+        type: "saveSettings",
+        settings: {
+          ...(currentSettings || {}),
+          activeProfileId: nextProfileId
+        }
+      });
+      currentSettings = nextSettings;
+      activeModelLabel = buildActiveModelLabel(nextSettings);
+      applyLanguage(nextSettings.language);
+      applyAppearance(nextSettings.appearance);
+      renderModelSelect();
+      setStatus(t("modelSwitched", { model: activeModelDisplayName(nextSettings) }));
+    } catch (error) {
+      if (previousProfileId) modelSelect.value = previousProfileId;
+      showExtensionReloadNotice(error);
+    } finally {
+      renderModelSelect();
+    }
+  }
+
+  function buildActiveModelLabel(settings) {
+    const display = activeModelDisplayName(settings);
+    return display ? ` · ${display}` : "";
+  }
+
+  function activeModelDisplayName(settings) {
+    const profiles = Array.isArray(settings?.modelProfiles) ? settings.modelProfiles : [];
+    const active = profiles.find((profile) => profile.id === settings?.activeProfileId);
+    return active?.name || active?.model || settings?.model || "";
+  }
+
+  function formatProfileOption(profile) {
+    const name = profile.name || profile.model || t("untitledProfile");
+    const model = profile.model && profile.model !== name ? ` · ${profile.model}` : "";
+    return `${name}${model}`;
   }
 
   async function loadConversation() {
