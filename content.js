@@ -44,6 +44,7 @@
   let renderTimer = 0;
   let activeStreamCancel = null;
   let isGenerating = false;
+  let historyJumpIndex = -1;
   let settingsRefreshPromise = null;
   let activeAppearance = "system";
   let currentLanguage = "system";
@@ -119,6 +120,10 @@
 
       <footer class="alc-composer">
         <textarea rows="1" placeholder="问这篇论文：方法假设、实验设计、局限、和你的方向有什么关系..." data-i18n-placeholder="askPlaceholder"></textarea>
+        <div class="alc-history-jump" title="快速翻阅当前对话" data-i18n-title="historyJump">
+          <button class="alc-history-prev" type="button" title="上一条历史对话" data-i18n-title="historyPrev">↑</button>
+          <button class="alc-history-next" type="button" title="下一条历史对话" data-i18n-title="historyNext">↓</button>
+        </div>
         <button class="alc-send" data-mode="ask" type="button" data-i18n="send">发送</button>
       </footer>
       <div class="alc-status" role="status"></div>
@@ -141,6 +146,8 @@
   const fullTextToggle = $(".alc-fulltext");
   const modelSelect = $(".alc-model-select");
   const sendButton = $(".alc-send");
+  const historyPrevButton = $(".alc-history-prev");
+  const historyNextButton = $(".alc-history-next");
   const layoutToggleButton = $(".alc-layout-toggle");
   const restoreLayoutButton = $(".alc-restore-layout");
   const resizeEdge = $(".alc-resize-edge");
@@ -174,6 +181,8 @@
   onClick(".alc-copy", copyCurrentMarkdown);
   onClick(".alc-save", saveCurrentNote);
   onClick(".alc-clear-chat", clearCurrentConversation);
+  onClick(".alc-history-prev", () => jumpConversationMessage(-1));
+  onClick(".alc-history-next", () => jumpConversationMessage(1));
   onClick(".alc-layout-toggle", togglePanelLayoutMode);
   onClick(".alc-restore-layout", restorePanelLayout);
   modelSelect.addEventListener("change", switchChatModel);
@@ -675,6 +684,7 @@
 
     currentMode = mode;
     const contextMode = resolveTurnContextMode(mode);
+    historyJumpIndex = -1;
     setBusy(true);
     setStatus(contextMode === "full" ? t("preparingFull") : t("preparingFast"));
     const preview = appendPreviewTurn(userText);
@@ -2083,24 +2093,115 @@
   function renderConversation(conversation) {
     const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
     if (!messages.length) {
+      historyJumpIndex = -1;
       chat.innerHTML = `
         <div class="alc-welcome">
           <strong>${escapeHtml(t("welcomeTitle"))}</strong>
           <p>${escapeHtml(t("welcomeBody"))}</p>
         </div>
       `;
+      updateHistoryJumpButtons(0);
       return;
     }
 
-    chat.innerHTML = messages.map((message) => `
-      <article class="alc-message alc-message-${message.role}${message.streaming ? " is-streaming" : ""}">
+    chat.innerHTML = messages.map((message, index) => `
+      <article class="alc-message alc-message-${message.role}${message.streaming ? " is-streaming" : ""}" data-message-index="${index}" data-message-role="${escapeHtml(message.role || "")}">
         <div class="alc-bubble">
           <div class="alc-message-meta">${message.role === "user" ? escapeHtml(t("you")) : "AI"} · ${formatTime(message.createdAt, currentLanguage)}${message.mode ? ` · ${escapeHtml(modeLabel(message.mode, currentLanguage))}` : ""}${message.stopped ? ` · ${escapeHtml(t("stoppedBadge"))}` : ""}${message.role === "assistant" ? formatMessageUsageMeta(message, currentLanguage) : ""}</div>
           <div class="alc-message-body">${message.role === "assistant" ? markdownToHtml(message.text || "") : escapeHtml(message.text || "")}</div>
         </div>
       </article>
     `).join("");
+    updateHistoryJumpButtons(messages.length);
+    if (historyJumpIndex >= 0) {
+      scrollToMessageIndex(historyJumpIndex, { behavior: "auto", updateStatus: false });
+      return;
+    }
     chat.scrollTop = chat.scrollHeight;
+  }
+
+  function getConversationMessageNodes() {
+    return Array.from(chat.querySelectorAll(".alc-message[data-message-index]"));
+  }
+
+  function updateHistoryJumpButtons(count = getConversationMessageNodes().length) {
+    const hasMessages = count > 0;
+    if (historyPrevButton) historyPrevButton.disabled = !hasMessages;
+    if (historyNextButton) historyNextButton.disabled = !hasMessages;
+  }
+
+  function jumpConversationMessage(direction) {
+    const nodes = getConversationMessageNodes();
+    if (!nodes.length) {
+      historyJumpIndex = -1;
+      updateHistoryJumpButtons(0);
+      setStatus(t("noHistory"));
+      return;
+    }
+    const currentIndex = getVisibleHistoryJumpIndex(nodes);
+    if (direction > 0 && currentIndex >= nodes.length - 1) {
+      resumeConversationAutoScroll();
+      return;
+    }
+    const nextIndex = direction < 0
+      ? Math.max(0, currentIndex - 1)
+      : Math.min(nodes.length - 1, currentIndex + 1);
+    scrollToMessageIndex(nextIndex);
+  }
+
+  function getVisibleHistoryJumpIndex(nodes) {
+    if (historyJumpIndex >= 0 && historyJumpIndex < nodes.length) {
+      return historyJumpIndex;
+    }
+    const chatRect = chat.getBoundingClientRect();
+    const anchorY = chatRect.top + Math.min(72, chatRect.height * 0.25);
+    let currentIndex = 0;
+    nodes.forEach((node, index) => {
+      if (node.getBoundingClientRect().top <= anchorY) {
+        currentIndex = index;
+      }
+    });
+    return currentIndex;
+  }
+
+  function scrollToMessageIndex(index, options = {}) {
+    const nodes = getConversationMessageNodes();
+    if (!nodes.length) return;
+    const targetIndex = Math.max(0, Math.min(nodes.length - 1, Number(index) || 0));
+    const target = nodes[targetIndex];
+    historyJumpIndex = targetIndex;
+    nodes.forEach((node) => {
+      node.classList.toggle("is-jump-target", node === target);
+    });
+    const chatRect = chat.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const top = Math.max(0, targetRect.top - chatRect.top + chat.scrollTop - 8);
+    chat.scrollTo({
+      top,
+      behavior: options.behavior || "smooth"
+    });
+    updateHistoryJumpButtons(nodes.length);
+    if (options.updateStatus !== false) {
+      setStatus(t("historyJumpStatus", {
+        current: targetIndex + 1,
+        total: nodes.length
+      }));
+    }
+  }
+
+  function resumeConversationAutoScroll(options = {}) {
+    historyJumpIndex = -1;
+    getConversationMessageNodes().forEach((node) => {
+      node.classList.remove("is-jump-target");
+    });
+    updateHistoryJumpButtons();
+    chat.scrollTo({
+      top: chat.scrollHeight,
+      behavior: options.behavior || "smooth"
+    });
+    if (options.updateStatus !== false) {
+      setStatus(t("historyJumpBottom"));
+    }
   }
 
   function setBusy(isBusy) {
@@ -2108,6 +2209,7 @@
     shadow.querySelectorAll("button, textarea, input, select").forEach((node) => {
       if (node.classList.contains("alc-close") || node.classList.contains("alc-fab")) return;
       if (node.classList.contains("alc-layout-toggle") || node.classList.contains("alc-restore-layout")) return;
+      if (node.classList.contains("alc-history-prev") || node.classList.contains("alc-history-next")) return;
       if (node.classList.contains("alc-fulltext")) {
         node.disabled = true;
         node.checked = true;
@@ -2141,7 +2243,16 @@
   function formatWebChatStatus(status, fallbackLabel = "WebChat") {
     const label = status?.label || fallbackLabel;
     const chars = formatTokenCount(status?.lastTextLength || 0);
+    const thinkingChars = formatTokenCount(status?.lastThinkingLength || 0);
+    const elapsed = formatWebChatElapsed(status?.elapsedMs);
     const phase = status?.phase || "";
+    if (isThinkingWebChatSite(status?.site) && (phase === "waiting_for_first_token" || (phase === "waiting_for_completion" && !Number(status?.lastTextLength || 0)))) {
+      if (Number(status?.lastThinkingLength || 0) > 0) {
+        return t("webchatThinkingWithReasoning", { label, elapsed, chars: thinkingChars });
+      }
+      if (elapsed) return t("webchatThinkingWithElapsed", { label, elapsed });
+      return t("webchatThinking", { label });
+    }
     const phaseMap = {
       pdf_uploading: "webchatPdfUploading",
       pdf_uploaded: "webchatPdfUploaded",
@@ -2155,6 +2266,16 @@
     const key = phaseMap[phase];
     if (!key) return "";
     return t(key, { label, chars });
+  }
+
+  function isThinkingWebChatSite(site) {
+    return site === "chatgpt" || site === "deepseek";
+  }
+
+  function formatWebChatElapsed(elapsedMs) {
+    const seconds = Math.max(0, Math.floor(Number(elapsedMs) / 1000));
+    if (!seconds) return "";
+    return t("webchatElapsedSeconds", { seconds });
   }
 
   function showExtensionReloadNotice(error) {

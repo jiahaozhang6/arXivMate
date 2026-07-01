@@ -2600,6 +2600,7 @@
         site: site.id,
         elapsedMs: Date.now() - startedAt,
         lastTextLength: lastText.length,
+        lastThinkingLength: (lastThinking || sseThinking || "").length,
         activeStreamCount,
         sseDone
       });

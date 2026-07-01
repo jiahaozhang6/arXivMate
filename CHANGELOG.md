@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.17 - 2026-07-01
+
+Chat navigation and WebChat thinking-status release.
+
+- Add quick previous/next buttons in the paper chat composer for browsing the current conversation.
+- Fix chat navigation during generation: pressing next at the newest message now returns to the live bottom and resumes auto-following streamed output.
+- Show active thinking/waiting status for ChatGPT Web and DeepSeek Web, including elapsed wait time and received reasoning length when available.
+- Add lightweight contract tests for chat navigation and WebChat thinking status.
+
 ## 0.1.16 - 2026-07-01
 
 PDF sites, manual save, and Markdown rendering release.

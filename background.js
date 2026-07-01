@@ -1037,6 +1037,7 @@ async function callWebChatStream(settings, messages, webchatPdf, paper, webchatS
           label: webchat.label,
           elapsedMs: Number(message.elapsedMs) || 0,
           lastTextLength: Number(message.lastTextLength) || latestText.length || 0,
+          lastThinkingLength: Number(message.lastThinkingLength) || latestThinking.length || 0,
           diagnostic: message.diagnostic || null
         });
         return;

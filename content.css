@@ -500,6 +500,11 @@
   width: 100%;
 }
 
+.alc-message.is-jump-target .alc-bubble {
+  outline: 2px solid var(--alc-focus);
+  outline-offset: 2px;
+}
+
 .alc-message-user {
   justify-content: flex-end;
 }
@@ -768,7 +773,7 @@
 .alc-composer {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: end;
   gap: 8px;
   padding: 9px 10px;
@@ -799,6 +804,31 @@
   border-color: var(--alc-accent);
 }
 
+.alc-history-jump {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 30px);
+  gap: 4px;
+}
+
+.alc-history-jump button {
+  width: 30px;
+  min-height: 38px;
+  border: 1px solid var(--alc-line);
+  border-radius: 8px;
+  background: var(--alc-control);
+  color: var(--alc-text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.alc-history-jump button:hover:not(:disabled) {
+  border-color: var(--alc-accent);
+  color: var(--alc-accent-strong);
+}
+
 .alc-send {
   min-width: 58px;
   min-height: 38px;
@@ -827,6 +857,10 @@ input:disabled,
 select:disabled {
   cursor: wait;
   opacity: 0.62;
+}
+
+.alc-history-jump button:disabled {
+  cursor: default;
 }
 
 .alc-status {
