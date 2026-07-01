@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.16 - 2026-07-01
+
+PDF sites, manual save, and Markdown rendering release.
+
+- Add ACM Digital Library detection and page/full-text fallback for DOI, PDF, EPDF, and Full HTML pages.
+- Improve WebChat PDF preparation for ACM/IEEE pages by falling back to readable page text and generated context PDFs when direct PDF download is blocked.
+- Stop auto-saving generated chat history; conversations now enter the review library only when the user clicks Save, while current-page follow-up context still works.
+- Improve Markdown rendering for escaped math, math-only code spans, and compact section dividers.
+- Rewrite the README opening so supported sites and PDF page types are visible first.
+
 ## 0.1.15 - 2026-07-01
 
 WebChat PDF attachment and thinking display release.

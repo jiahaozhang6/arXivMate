@@ -32,7 +32,7 @@ const MODEL_PROFILES_LOCAL_KEY = "modelProfiles";
 const BACKUP_FORMAT = "arXivMate.localData";
 const BACKUP_VERSION = 1;
 const WEBCHAT_PDF_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
-const WEBCHAT_BRIDGE_VERSION = 12;
+const WEBCHAT_BRIDGE_VERSION = 13;
 
 const PROVIDER_PRESETS = {
   openai: {
@@ -180,14 +180,15 @@ async function handleMessage(message, sender = {}) {
         paper: message.paper,
         mode: message.mode,
         question: message.question,
-        persist: message.persist !== false,
+        persist: message.persist === true,
         contextMode: message.contextMode,
-        profileId: message.profileId
+        profileId: message.profileId,
+        conversationMessages: message.conversationMessages,
+        webchatSessions: message.webchatSessions,
+        webchatSession: message.webchatSession
       });
-    case "appendPartialConversationTurn":
-      return appendPartialConversationTurn(message);
     case "saveNote":
-      return saveNote(message.paper, message.summary, message.mode);
+      return saveNote(message.paper, message.summary, message.mode, message.conversation);
     case "getNote":
       return getNote(message.id);
     case "getConversation":
@@ -732,8 +733,28 @@ async function listModelsForProfile(profile) {
   };
 }
 
-async function summarizePaper({ paper, mode = "quick", question = "", persist = true, contextMode = "auto", profileId = "" }) {
-  const prepared = await prepareSummarizePaper({ paper, mode, question, persist, contextMode, profileId });
+async function summarizePaper({
+  paper,
+  mode = "quick",
+  question = "",
+  persist = false,
+  contextMode = "auto",
+  profileId = "",
+  conversationMessages = [],
+  webchatSessions = null,
+  webchatSession = null
+}) {
+  const prepared = await prepareSummarizePaper({
+    paper,
+    mode,
+    question,
+    persist,
+    contextMode,
+    profileId,
+    conversationMessages,
+    webchatSessions,
+    webchatSession
+  });
   const result = isWebChatProvider(prepared.settings.provider)
     ? await callWebChat(prepared.settings, prepared.messages, prepared.webchatPdf, prepared.normalizedPaper, prepared.webchatSession)
     : await callChatCompletions(prepared.settings, prepared.messages);
@@ -745,9 +766,12 @@ async function streamSummarizePaper(message, port, signal) {
     paper: message.paper,
     mode: message.mode,
     question: message.question,
-    persist: message.persist !== false,
+    persist: message.persist === true,
     contextMode: message.contextMode,
-    profileId: message.profileId
+    profileId: message.profileId,
+    conversationMessages: message.conversationMessages,
+    webchatSessions: message.webchatSessions,
+    webchatSession: message.webchatSession
   });
   postPort(port, {
     type: "meta",
@@ -791,7 +815,17 @@ async function streamSummarizePaper(message, port, signal) {
   return finishSummarizePaper(prepared, result);
 }
 
-async function prepareSummarizePaper({ paper, mode = "quick", question = "", persist = true, contextMode = "auto", profileId = "" }) {
+async function prepareSummarizePaper({
+  paper,
+  mode = "quick",
+  question = "",
+  persist = false,
+  contextMode = "auto",
+  profileId = "",
+  conversationMessages = [],
+  webchatSessions = null,
+  webchatSession = null
+}) {
   const baseSettings = await getSettings();
   const settings = resolveRequestSettings(baseSettings, profileId);
 
@@ -800,12 +834,16 @@ async function prepareSummarizePaper({ paper, mode = "quick", question = "", per
   const existingConversation = persist && normalizedPaper.id
     ? await getConversation(normalizedPaper.id)
     : null;
-  const webchatSession = isWebChatProvider(settings.provider)
-    ? getReusableWebChatSession(existingConversation, settings)
+  const transientConversation = persist
+    ? null
+    : buildTransientConversation(conversationMessages, webchatSessions, webchatSession);
+  const conversationForContext = existingConversation || transientConversation;
+  const reusableWebChatSession = isWebChatProvider(settings.provider)
+    ? normalizeWebChatSession(webchatSession) || getReusableWebChatSession(conversationForContext, settings)
     : null;
-  const webchatPdf = webchatSession?.pdfAttached ? null : normalizedPaper.webchatPdf;
-  const conversationMessages = mode === "ask"
-    ? getRecentConversationMessages(existingConversation?.messages || [], settings)
+  const webchatPdf = reusableWebChatSession?.pdfAttached ? null : normalizedPaper.webchatPdf;
+  const recentConversationMessages = mode === "ask"
+    ? getRecentConversationMessages(conversationForContext?.messages || [], settings)
     : [];
 
   let messages = buildPrompt({
@@ -815,7 +853,7 @@ async function prepareSummarizePaper({ paper, mode = "quick", question = "", per
     fullText: paperContext.fullText,
     contextSource: paperContext.contextSource,
     language: settings.language,
-    conversationMessages
+    conversationMessages: recentConversationMessages
   });
   const inputBudget = applyInputBudget(messages, settings);
   messages = inputBudget.messages;
@@ -825,7 +863,7 @@ async function prepareSummarizePaper({ paper, mode = "quick", question = "", per
     normalizedPaper,
     paperContext,
     existingConversation,
-    webchatSession,
+    webchatSession: reusableWebChatSession,
     webchatPdf,
     messages,
     inputBudget,
@@ -862,7 +900,8 @@ async function finishSummarizePaper(prepared, result) {
     contextWindow: prepared.inputBudget.limitTokens,
     contextCapped: prepared.inputBudget.capped,
     generatedAt,
-    conversation
+    conversation,
+    webchatSession
   };
 }
 
@@ -897,42 +936,6 @@ async function ensureWebChatStatusTab(config) {
   if (!tab.id) throw new Error(`无法打开 ${config.label} 网页。`);
   await waitForTabComplete(tab.id);
   return chrome.tabs.get(tab.id);
-}
-
-async function appendPartialConversationTurn(message) {
-  const baseSettings = await getSettings();
-  const settings = resolveRequestSettings(baseSettings, message.profileId);
-  const normalizedPaper = normalizePaper(message.paper);
-  const answer = normalizeTextBlock(message.answer);
-  if (!normalizedPaper.id) throw new Error("没有识别到文档 ID，无法保存已停止的对话。");
-  if (!answer) throw new Error("没有可保存的已生成内容。");
-  const generatedAt = new Date().toISOString();
-  const conversation = await appendConversationTurn({
-    paper: normalizedPaper,
-    mode: message.mode || "ask",
-    question: message.question || "",
-    answer,
-    source: normalizeString(message.source) || "partial-generation",
-    settings,
-    inputBudget: normalizePartialInputBudget(message),
-    createdAt: generatedAt,
-    stopped: true
-  });
-  return {
-    text: answer,
-    source: normalizeString(message.source) || "partial-generation",
-    generatedAt,
-    conversation,
-    stopped: true
-  };
-}
-
-function normalizePartialInputBudget(message) {
-  return {
-    estimatedAfterTokens: Number(message.contextTokens) || undefined,
-    limitTokens: Number(message.contextWindow) || undefined,
-    capped: Boolean(message.contextCapped)
-  };
 }
 
 async function callChatCompletions(settings, messages) {
@@ -1316,7 +1319,7 @@ function buildWebChatPrompt(messages, settings, options = {}) {
     return buildReusableWebChatPrompt(messages, settings, options.paper, options.webchatSession);
   }
   if (options?.webchatPdf?.base64) {
-    return buildAttachmentAwareWebChatPrompt(messages, settings, options.paper);
+    return buildAttachmentAwareWebChatPrompt(messages, settings, options.paper, options.webchatPdf);
   }
   const chunks = [
     "You are being used through arXivMate WebChat mode. Follow the original roles and answer the final user request.",
@@ -1365,10 +1368,15 @@ function buildReusableWebChatPrompt(messages, settings, paper = {}, session = {}
   ].filter(Boolean).join("\n");
 }
 
-function buildAttachmentAwareWebChatPrompt(messages, settings, paper = {}) {
+function buildAttachmentAwareWebChatPrompt(messages, settings, paper = {}, webchatPdf = {}) {
   const chunks = [
     "You are being used through arXivMate WebChat mode.",
-    "A PDF file is attached in this chat. Read the attached PDF directly as the primary source.",
+    webchatPdf?.generated
+      ? "A generated context PDF is attached in this chat. It was generated by arXivMate from readable publisher page text because the original PDF download was blocked."
+      : "A PDF file is attached in this chat. Read the attached PDF directly as the primary source.",
+    webchatPdf?.generated
+      ? "Treat the generated context PDF as extracted paper context. Do not assume it preserves the publisher's original PDF layout."
+      : "",
     "Use the metadata below only to identify the document and guide the task; do not treat it as a replacement for the PDF.",
     `Current WebChat profile: ${settings.requestProfileName || settings.model || providerLabel(settings.provider)}`,
     "",
@@ -2337,18 +2345,38 @@ async function appendConversationTurn({ paper, mode, question, answer, source, s
     messages: nextMessages
   };
 
-  const pruned = Object.fromEntries(
-    Object.entries(conversations)
+  const pruned = pruneConversationMap(conversations);
+  await chrome.storage.local.set({ conversations: pruned });
+  return pruned[id];
+}
+
+function pruneConversationMap(conversations) {
+  return Object.fromEntries(
+    Object.entries(conversations || {})
       .sort((a, b) => String(b[1]?.updatedAt || "").localeCompare(String(a[1]?.updatedAt || "")))
       .slice(0, MAX_CONVERSATIONS)
   );
-  await chrome.storage.local.set({ conversations: pruned });
-  return pruned[id];
 }
 
 function stripTransientPaperFields(paper = {}) {
   const { webchatPdf, ...storedPaper } = paper || {};
   return storedPaper;
+}
+
+function buildTransientConversation(messages, webchatSessions, webchatSession) {
+  const normalizedMessages = normalizeConversationSnapshotMessages(messages, new Date().toISOString());
+  const sessions = normalizeWebChatSessionMap(webchatSessions);
+  const normalizedSession = normalizeWebChatSession(webchatSession);
+  if (normalizedSession) {
+    sessions[buildWebChatSessionKey(normalizedSession.provider, normalizedSession.profileId)] = {
+      ...sessions[buildWebChatSessionKey(normalizedSession.provider, normalizedSession.profileId)],
+      ...normalizedSession
+    };
+  }
+  return {
+    messages: normalizedMessages,
+    webchatSessions: sessions
+  };
 }
 
 function getReusableWebChatSession(conversation, settings) {
@@ -2465,11 +2493,11 @@ function decodeHtmlEntities(value) {
   });
 }
 
-async function saveNote(paper, summary, mode = "quick") {
+async function saveNote(paper, summary, mode = "quick", conversation = null) {
   const normalizedPaper = normalizePaper(paper);
   if (!normalizedPaper.id) throw new Error("没有识别到文档 ID，无法保存。");
   const now = new Date().toISOString();
-  const { notes = {} } = await chrome.storage.local.get("notes");
+  const { notes = {}, conversations = {} } = await chrome.storage.local.get(["notes", "conversations"]);
   const previous = notes[normalizedPaper.id] || {};
   const history = Array.isArray(previous.history) ? previous.history : [];
 
@@ -2490,8 +2518,105 @@ async function saveNote(paper, summary, mode = "quick") {
     ].slice(-12)
   };
 
-  await chrome.storage.local.set({ notes });
+  const conversationSnapshot = buildManualConversationSnapshot(normalizedPaper, conversation, mode, now);
+  const storageUpdate = { notes };
+  if (conversationSnapshot) {
+    const previousConversation = conversations[normalizedPaper.id] || {};
+    conversations[normalizedPaper.id] = {
+      ...previousConversation,
+      ...conversationSnapshot,
+      createdAt: previousConversation.createdAt || conversationSnapshot.createdAt || now,
+      updatedAt: now
+    };
+    storageUpdate.conversations = pruneConversationMap(conversations);
+  }
+
+  await chrome.storage.local.set(storageUpdate);
   return notes[normalizedPaper.id];
+}
+
+function buildManualConversationSnapshot(paper, conversation, mode, now) {
+  const messages = normalizeConversationSnapshotMessages(conversation?.messages, now);
+  if (!messages.length) return null;
+
+  const webchatSessions = normalizeWebChatSessionMap(conversation?.webchatSessions);
+  for (const message of messages) {
+    const session = normalizeWebChatSession(message.webchatSession);
+    if (!session) continue;
+    webchatSessions[buildWebChatSessionKey(session.provider, session.profileId)] = {
+      ...webchatSessions[buildWebChatSessionKey(session.provider, session.profileId)],
+      ...session
+    };
+  }
+
+  const lastUser = [...messages].reverse().find((message) => message.role === "user");
+  const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+  const storedPaper = stripTransientPaperFields(paper);
+  return {
+    ...storedPaper,
+    id: paper.id,
+    title: paper.title || normalizeString(conversation?.title) || paper.id,
+    kind: paper.sourceType === "pdf" ? "pdf" : "paper",
+    createdAt: normalizeString(conversation?.createdAt) || now,
+    updatedAt: now,
+    lastMode: normalizeString(lastAssistant?.mode || conversation?.lastMode || mode),
+    lastQuestion: normalizeTextBlock(lastUser?.text || conversation?.lastQuestion),
+    lastAnswer: normalizeTextBlock(lastAssistant?.text || conversation?.lastAnswer),
+    lastSource: normalizeString(lastAssistant?.source || conversation?.lastSource),
+    lastStopped: Boolean(lastAssistant?.stopped || conversation?.lastStopped),
+    provider: normalizeString(lastAssistant?.provider || conversation?.provider),
+    model: normalizeString(lastAssistant?.model || conversation?.model),
+    maxOutputTokens: Number(lastAssistant?.maxOutputTokens || conversation?.maxOutputTokens) || undefined,
+    inputTokenCap: Number(lastAssistant?.inputTokenCap || conversation?.inputTokenCap) || undefined,
+    contextTokens: Number(lastAssistant?.contextTokens || conversation?.contextTokens) || undefined,
+    contextWindow: Number(lastAssistant?.contextWindow || conversation?.contextWindow) || undefined,
+    contextCapped: Boolean(lastAssistant?.contextCapped || conversation?.contextCapped),
+    webchatSessions,
+    messageCount: messages.length,
+    turnCount: countUserTurns(messages),
+    messages
+  };
+}
+
+function normalizeConversationSnapshotMessages(messages, now) {
+  if (!Array.isArray(messages)) return [];
+  return messages
+    .filter((message) => message && (message.role === "user" || message.role === "assistant"))
+    .map((message, index) => {
+      const text = normalizeTextBlock(message.text);
+      if (!text) return null;
+      return {
+        id: normalizeString(message.id) || `manual-${index}`,
+        turnId: normalizeString(message.turnId),
+        role: message.role === "assistant" ? "assistant" : "user",
+        mode: normalizeString(message.mode),
+        text,
+        source: normalizeString(message.source),
+        model: normalizeString(message.model),
+        provider: normalizeString(message.provider),
+        maxOutputTokens: Number(message.maxOutputTokens) || undefined,
+        inputTokenCap: Number(message.inputTokenCap) || undefined,
+        contextTokens: Number(message.contextTokens) || undefined,
+        contextWindow: Number(message.contextWindow) || undefined,
+        contextCapped: Boolean(message.contextCapped),
+        stopped: Boolean(message.stopped),
+        webchatSession: normalizeWebChatSession(message.webchatSession) || undefined,
+        createdAt: normalizeString(message.createdAt) || now
+      };
+    })
+    .filter(Boolean)
+    .slice(-MAX_MESSAGES_PER_CONVERSATION);
+}
+
+function normalizeWebChatSessionMap(sessions) {
+  const normalized = {};
+  if (!sessions || typeof sessions !== "object") return normalized;
+  for (const value of Object.values(sessions)) {
+    const session = normalizeWebChatSession(value);
+    if (!session) continue;
+    normalized[buildWebChatSessionKey(session.provider, session.profileId)] = session;
+  }
+  return normalized;
 }
 
 async function getNote(id) {

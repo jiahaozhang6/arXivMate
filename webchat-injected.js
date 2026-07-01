@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const PATCH_VERSION = 12;
+  const PATCH_VERSION = 13;
   if (window.__arxivMateWebChatFetchPatched >= PATCH_VERSION && window.fetch === window.__arxivMatePatchedFetch) return;
   window.__arxivMateWebChatFetchPatched = PATCH_VERSION;
 

@@ -223,6 +223,7 @@ function renderSubjectChips(subjects) {
 
 function formatNoteId(note) {
   if (!note?.id) return "";
+  if (note.sourceType === "acm") return "ACM";
   return note.sourceType === "pdf" ? "PDF" : note.id;
 }
 
@@ -318,7 +319,7 @@ function buildMarkdown(note) {
   return [
     `# ${note.title || note.id || "Paper"}`,
     "",
-    `- Type: ${note.sourceType === "pdf" ? "PDF" : "arXiv"}`,
+    `- Type: ${note.sourceType === "pdf" ? "PDF" : note.sourceType === "acm" ? "ACM" : "arXiv"}`,
     `- ID: ${note.id || ""}`,
     `- Authors: ${note.authors || ""}`,
     `- Submitted: ${note.submittedAt || ""}`,

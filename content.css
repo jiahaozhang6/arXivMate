@@ -620,6 +620,14 @@
   margin: 10px 0;
 }
 
+.alc-message-body .am-section-break {
+  width: 34%;
+  max-width: 240px;
+  min-width: 92px;
+  margin: 9px 0;
+  opacity: 0.62;
+}
+
 .alc-message-body .am-math {
   font-size: 1.04em;
   line-height: 1.45;

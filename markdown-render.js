@@ -39,10 +39,12 @@ window.ArxivMateMarkdown = (() => {
 
     renderer.validateLink = (url) => isSafeUrl(url);
     installHeadingOffset(renderer);
+    installSectionBreaks(renderer);
     installLinkAttributes(renderer);
     installImageAttributes(renderer);
     installTableWrapper(renderer);
     installTaskLists(renderer);
+    installMathCodeSpans(renderer);
     installThinkingBlocks(renderer);
     return renderer;
   }
@@ -56,6 +58,10 @@ window.ArxivMateMarkdown = (() => {
       tokens[index].tag = offsetHeadingTag(tokens[index].tag, env.headingOffset);
       return self.renderToken(tokens, index, options);
     };
+  }
+
+  function installSectionBreaks(md) {
+    md.renderer.rules.hr = () => '<hr class="am-section-break">';
   }
 
   function installLinkAttributes(md) {
@@ -108,6 +114,15 @@ window.ArxivMateMarkdown = (() => {
         tokens[index - 2].attrJoin("class", "am-task-list-item");
       }
     });
+  }
+
+  function installMathCodeSpans(md) {
+    const defaultRender = md.renderer.rules.code_inline || ((tokens, index) =>
+      `<code>${escapeHtml(tokens[index].content || "")}</code>`);
+    md.renderer.rules.code_inline = (tokens, index, options, env, self) => {
+      const rendered = window.ArxivMateMath?.renderStandaloneMath?.(tokens[index].content || "");
+      return rendered || defaultRender(tokens, index, options, env, self);
+    };
   }
 
   function installThinkingBlocks(md) {

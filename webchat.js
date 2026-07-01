@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const BRIDGE_VERSION = 12;
+  const BRIDGE_VERSION = 13;
   if (window.__arxivMateWebChatBridgeInstalled >= BRIDGE_VERSION) return;
   window.__arxivMateWebChatBridgeInstalled = BRIDGE_VERSION;
 
@@ -452,13 +452,108 @@
     return findComposer(site) || document.body;
   }
 
-  function findFileInput(site = currentSite()) {
-    for (const selector of site?.fileInputSelectors || []) {
-      const inputs = Array.from(document.querySelectorAll(selector))
-        .filter((node) => node instanceof HTMLInputElement && node.type === "file");
-      if (inputs.length) return inputs[inputs.length - 1];
+  function findFileInputs(site = currentSite()) {
+    const seen = new Set();
+    const inputs = [];
+    for (const selector of [...(site?.fileInputSelectors || []), 'input[type="file"]']) {
+      try {
+        for (const node of Array.from(document.querySelectorAll(selector))) {
+          if (!(node instanceof HTMLInputElement) || node.type !== "file" || seen.has(node)) continue;
+          seen.add(node);
+          inputs.push(node);
+        }
+      } catch {}
     }
-    return null;
+    return inputs;
+  }
+
+  function fileInputAcceptsPdf(input) {
+    if (!(input instanceof HTMLInputElement) || input.type !== "file" || input.disabled) return false;
+    const accept = normalizeText(input.getAttribute("accept") || "").toLowerCase();
+    const identity = normalizeText([
+      input.id,
+      input.name,
+      input.getAttribute("data-testid"),
+      input.getAttribute("aria-label"),
+      input.getAttribute("title"),
+      input.getAttribute("class")
+    ].join(" ")).toLowerCase();
+    if (/upload-(photos?|camera)|camera|photo|image/.test(identity) && !/upload-files|pdf|file/.test(identity)) return false;
+    if (!accept) return true;
+    const accepts = accept.split(",").map((part) => part.trim()).filter(Boolean);
+    const pdfCapable = accepts.some((part) =>
+      part === "*/*" ||
+      part === "application/*" ||
+      part === "application/pdf" ||
+      part === ".pdf" ||
+      /\bpdf\b/.test(part)
+    );
+    if (pdfCapable) return true;
+    const mediaOnly = accepts.length > 0 && accepts.every((part) =>
+      /^image\//.test(part) ||
+      /^video\//.test(part) ||
+      /^audio\//.test(part) ||
+      part === ".png" ||
+      part === ".jpg" ||
+      part === ".jpeg" ||
+      part === ".gif" ||
+      part === ".webp"
+    );
+    return !mediaOnly;
+  }
+
+  function scoreFileInput(input, site = currentSite()) {
+    if (!fileInputAcceptsPdf(input)) return -Infinity;
+    const accept = normalizeText(input.getAttribute("accept") || "").toLowerCase();
+    const identity = normalizeText([
+      input.id,
+      input.name,
+      input.getAttribute("data-testid"),
+      input.getAttribute("aria-label"),
+      input.getAttribute("title"),
+      input.getAttribute("class")
+    ].join(" ")).toLowerCase();
+    let score = 0;
+    if (/\bpdf\b|application\/pdf|\.pdf/.test(accept)) score += 1200;
+    if (!accept) score += 600;
+    if (input.multiple) score += 80;
+    if (isVisible(input)) score += 30;
+    if (/upload|attach|file|pdf|附件|上传|文件/.test(identity)) score += 350;
+    if (site?.id === "chatgpt") {
+      if (input.id === "upload-files") score += 2500;
+      if (/upload-files/.test(identity)) score += 1200;
+      if (/upload-photos|upload-camera|camera|photo|image/.test(identity)) score -= 5000;
+    }
+    if (site?.id === "deepseek" && /upload|attach|file|pdf|附件|上传|文件/.test(identity)) score += 600;
+    return score;
+  }
+
+  function findFileInput(site = currentSite()) {
+    return findFileInputs(site)
+      .map((input, index) => ({ input, index, score: scoreFileInput(input, site) }))
+      .filter((item) => Number.isFinite(item.score))
+      .sort((left, right) => right.score - left.score || right.index - left.index)[0]?.input || null;
+  }
+
+  function describeFileInput(input) {
+    if (!(input instanceof HTMLInputElement)) return null;
+    const rect = input.getBoundingClientRect?.();
+    return {
+      id: input.id || "",
+      accept: input.getAttribute("accept") || "",
+      name: input.getAttribute("name") || "",
+      testid: input.getAttribute("data-testid") || "",
+      className: String(input.getAttribute("class") || "").slice(0, 120),
+      multiple: Boolean(input.multiple),
+      disabled: Boolean(input.disabled),
+      visible: isVisible(input),
+      score: scoreFileInput(input, currentSite()),
+      rect: rect ? `${Math.round(rect.x)},${Math.round(rect.y)},${Math.round(rect.width)}x${Math.round(rect.height)}` : "none"
+    };
+  }
+
+  function getFileInputDiagnostics(site = currentSite()) {
+    return findFileInputs(site).map(describeFileInput).filter(Boolean).slice(-8);
   }
 
   function findAttachmentButton(site = currentSite()) {
@@ -899,10 +994,12 @@
     if (baseline.count > 0 && baseline.hasExpectedFile) return true;
     const transfer = new DataTransfer();
     transfer.items.add(file);
+    let selectedInputDiagnostic = null;
 
     await openAttachmentPicker(site);
     const pickerInput = await waitForAttachmentFileInput(site, site?.id === "chatgpt" ? 5000 : 2500);
     if (pickerInput) {
+      selectedInputDiagnostic = describeFileInput(pickerInput);
       applyFilesToInput(pickerInput, transfer.files);
       if (await waitForAttachmentAccepted(site, baseline, 25000, file.name)) return true;
     }
@@ -922,11 +1019,16 @@
 
     const input = findFileInput(site);
     if (input) {
+      selectedInputDiagnostic = describeFileInput(input);
       applyFilesToInput(input, transfer.files);
       if (await waitForAttachmentAccepted(site, baseline, 15000, file.name)) return true;
     }
 
-    throw new Error(`${site.label} 页面没有被 arXivMate 识别为已接收本次 PDF 附件（${file.name}）。若页面中已经出现 PDF 卡片，请刷新 WebChat 页面后重试；诊断：${JSON.stringify(getAttachmentState(site, file.name))}`);
+    throw new Error(`${site.label} 页面没有被 arXivMate 识别为已接收本次 PDF 附件（${file.name}）。若页面中已经出现 PDF 卡片，请刷新 WebChat 页面后重试；诊断：${JSON.stringify({
+      attachmentState: getAttachmentState(site, file.name),
+      selectedFileInput: selectedInputDiagnostic,
+      fileInputs: getFileInputDiagnostics(site)
+    })}`);
   }
 
   function applyFilesToInput(input, files) {
@@ -1681,6 +1783,8 @@
       composerFound: Boolean(composer),
       composerTextLength: normalizeText(readComposerText(composer)).length,
       sendControlState: describeControl(sendButton),
+      selectedFileInput: describeFileInput(findFileInput(currentSite())),
+      fileInputs: getFileInputDiagnostics(currentSite()),
       mainWorldInjected,
       networkHookActive,
       hookOk,

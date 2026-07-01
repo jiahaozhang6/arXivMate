@@ -277,6 +277,15 @@ window.ArxivMateMath = (() => {
         }
       }
 
+      if (text.startsWith("\\$", index) && !isEscaped(text, index)) {
+        const end = findClosingEscapedDollar(text, index + 2);
+        if (end >= 0) {
+          output += pushSegment(segments, text.slice(index + 2, end), false);
+          index = end + 2;
+          continue;
+        }
+      }
+
       if (text.startsWith("\\(", index)) {
         const end = findClosingDelimiter(text, index + 2, "\\)");
         if (end >= 0) {
@@ -513,6 +522,15 @@ window.ArxivMateMath = (() => {
     return -1;
   }
 
+  function findClosingEscapedDollar(text, start) {
+    let index = start;
+    while (index < text.length) {
+      if (text.startsWith("\\$", index) && !isEscaped(text, index)) return index;
+      index += 1;
+    }
+    return -1;
+  }
+
   function shouldOpenDollar(text, index) {
     if (isEscaped(text, index) || text[index + 1] === "$") return false;
     const next = text[index + 1] || "";
@@ -706,6 +724,32 @@ window.ArxivMateMath = (() => {
     return index;
   }
 
+  function renderStandaloneMath(value) {
+    const parsed = readStandaloneMath(value);
+    return parsed ? renderMath(parsed.tex, parsed.display) : "";
+  }
+
+  function readStandaloneMath(value) {
+    const text = String(value || "").trim();
+    if (!text) return null;
+    if (text.startsWith("\\$") && text.endsWith("\\$") && text.length > 4) {
+      return { tex: text.slice(2, -2), display: false };
+    }
+    if (text.startsWith("$$") && text.endsWith("$$") && text.length > 4) {
+      return { tex: text.slice(2, -2), display: true };
+    }
+    if (text.startsWith("$") && text.endsWith("$") && text.length > 2 && !text.startsWith("$$")) {
+      return { tex: text.slice(1, -1), display: false };
+    }
+    if (text.startsWith("\\(") && text.endsWith("\\)") && text.length > 4) {
+      return { tex: text.slice(2, -2), display: false };
+    }
+    if (text.startsWith("\\[") && text.endsWith("\\]") && text.length > 4) {
+      return { tex: text.slice(2, -2), display: true };
+    }
+    return null;
+  }
+
   function normalizeTex(tex) {
     return decodeHtmlEntities(String(tex || ""))
       .replace(/\\\\(?=[A-Za-z])/g, "\\")
@@ -744,6 +788,7 @@ window.ArxivMateMath = (() => {
     extractMath,
     restoreMath,
     renderInlineMath,
+    renderStandaloneMath,
     renderDisplayMath
   };
 })();

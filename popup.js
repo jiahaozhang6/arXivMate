@@ -47,17 +47,28 @@ function updateTabStatus() {
 function isSupportedPaperTab(url) {
   const value = String(url || "");
   return /https?:\/\/(www\.)?arxiv\.org\/(abs|pdf)\//i.test(value) ||
+    isAcmArticleUrl(value) ||
     /\.pdf(?:[?#]|$)/i.test(value) ||
     isKnownDynamicPdfUrl(value);
 }
 
 function isKnownDynamicPdfUrl(url) {
   return isIeeeStampPdfUrl(url) ||
-    matchesHostPath(url, /(^|\.)dl\.acm\.org$/i, /\/doi\/pdf\//i) ||
+    matchesHostPath(url, /(^|\.)dl\.acm\.org$/i, /\/doi\/(?:pdf|epdf)\//i) ||
     matchesHostPath(url, /(^|\.)link\.springer\.com$/i, /\/content\/pdf\//i) ||
     matchesHostPath(url, /(^|\.)onlinelibrary\.wiley\.com$/i, /\/doi\/pdf(?:direct)?\//i) ||
     isScienceDirectPdfUrl(url) ||
     matchesHostPath(url, /(^|\.)researchgate\.net$/i, /\/publication\/.+\/download/i);
+}
+
+function isAcmArticleUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return /(^|\.)dl\.acm\.org$/i.test(parsed.hostname) &&
+      /\/doi\/(?:abs\/|fullHtml\/|pdf\/|epdf\/)?10\.\d{4,9}\//i.test(decodeURIComponent(parsed.pathname));
+  } catch {
+    return false;
+  }
 }
 
 function isIeeeStampPdfUrl(url) {
