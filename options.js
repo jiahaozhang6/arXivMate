@@ -42,6 +42,20 @@ const PROVIDER_PRESETS = {
     baseUrl: "http://localhost:11434/v1",
     model: "llama3.1"
   },
+  webchatChatGPT: {
+    label: "ChatGPT Web",
+    labelZh: "ChatGPT 网页版",
+    labelEn: "ChatGPT Web",
+    baseUrl: "webchat://chatgpt",
+    model: "ChatGPT Web"
+  },
+  webchatDeepSeek: {
+    label: "DeepSeek Web",
+    labelZh: "DeepSeek 网页版",
+    labelEn: "DeepSeek Web",
+    baseUrl: "webchat://deepseek",
+    model: "DeepSeek Web"
+  },
   custom: {
     label: "Custom OpenAI-compatible",
     labelZh: "自定义 OpenAI-compatible",
@@ -111,6 +125,13 @@ let revealApiKey = false;
 let currentLanguage = "system";
 const modelLoadCache = new Map();
 const autoLoadedModelKeys = new Set();
+const MESSAGE_TIMEOUTS = {
+  saveSettings: 8000,
+  testModelProfile: 45000,
+  listModelsForProfile: 20000,
+  checkForUpdate: 15000,
+  default: 15000
+};
 
 syncProjectVersion();
 renderAddProfileProviderOptions();
@@ -130,7 +151,8 @@ form.addEventListener("submit", async (event) => {
   setFormBusy(true);
   try {
     await saveCurrentSettings();
-    setStatus(t("settingsSaved", { count: profiles.length }));
+    const warning = settings?.storageWarning ? `（同步备份未完成：${settings.storageWarning}；本地设置已保存）` : "";
+    setStatus(`${t("settingsSaved", { count: profiles.length })}${warning}`);
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -249,6 +271,7 @@ function renderEmptyProfiles() {
 }
 
 function renderProfileEditor(profile) {
+  const isWebChat = isWebChatProvider(profile.provider);
   return `
     <header class="profile-editor-header">
       <div>
@@ -277,38 +300,48 @@ function renderProfileEditor(profile) {
             `).join("")}
           </select>
         </label>
-        <label>
-          <span>API Base URL</span>
-          <input data-field="baseUrl" value="${escapeAttr(profile.baseUrl)}" placeholder="https://api.openai.com/v1">
-        </label>
-        <label>
-          <span>API Key</span>
-          <div class="secret-row">
-            <input data-field="apiKey" type="${revealApiKey ? "text" : "password"}" autocomplete="off" value="${escapeAttr(profile.apiKey)}" placeholder="sk-...">
-            <button type="button" data-action="toggle-secret">${escapeHtml(revealApiKey ? t("hideApiKey") : t("showApiKey"))}</button>
-          </div>
-        </label>
+        ${isWebChat ? `
+          <label>
+            <span>WebChat</span>
+            <input data-field="baseUrl" value="${escapeAttr(profile.baseUrl)}" readonly>
+            <small>${escapeHtml(t("webchatHelp"))}</small>
+          </label>
+        ` : `
+          <label>
+            <span>API Base URL</span>
+            <input data-field="baseUrl" value="${escapeAttr(profile.baseUrl)}" placeholder="https://api.openai.com/v1">
+          </label>
+          <label>
+            <span>API Key</span>
+            <div class="secret-row">
+              <input data-field="apiKey" type="${revealApiKey ? "text" : "password"}" autocomplete="off" value="${escapeAttr(profile.apiKey)}" placeholder="sk-...">
+              <button type="button" data-action="toggle-secret">${escapeHtml(revealApiKey ? t("hideApiKey") : t("showApiKey"))}</button>
+            </div>
+          </label>
+        `}
         <label>
           <span>${escapeHtml(t("modelName"))}</span>
           <div class="model-row model-combo">
-            <input data-field="model" list="model-presets" value="${escapeAttr(profile.model)}" placeholder="gpt-4o-mini">
-            <select data-model-picker aria-label="${escapeAttr(t("modelName"))}">
-              ${renderModelPickerOptions(profile)}
-            </select>
-            <button type="button" data-action="load-models">${escapeHtml(t("loadModels"))}</button>
+            <input data-field="model" list="model-presets" value="${escapeAttr(profile.model)}" placeholder="gpt-4o-mini" ${isWebChat ? "readonly" : ""}>
+            ${isWebChat ? "" : `
+              <select data-model-picker aria-label="${escapeAttr(t("modelName"))}">
+                ${renderModelPickerOptions(profile)}
+              </select>
+              <button type="button" data-action="load-models">${escapeHtml(t("loadModels"))}</button>
+            `}
           </div>
-          <small>${escapeHtml(t("loadModelsHelp"))}</small>
+          <small>${escapeHtml(isWebChat ? t("webchatModelHelp") : t("loadModelsHelp"))}</small>
         </label>
       </div>
     </section>
 
-    <section class="profile-section">
+    ${isWebChat ? "" : `<section class="profile-section">
       <h3>${escapeHtml(t("generationSettings"))}</h3>
       <div class="profile-grid">
         ${renderNumericControl(profile, "temperature", "Temperature")}
         ${renderNumericControl(profile, "maxOutputTokens", t("outputTokens"))}
       </div>
-    </section>
+    </section>`}
 
     <details class="profile-advanced" open>
       <summary>${escapeHtml(t("advanced"))}</summary>
@@ -324,7 +357,7 @@ function renderProfileEditor(profile) {
             <option value="full" ${profile.defaultContextMode === "full" ? "selected" : ""}>${escapeHtml(t("fullContext"))}</option>
           </select>
         </label>
-        <label>
+        ${isWebChat ? "" : `<label>
           <span>${escapeHtml(t("thinkingOutput"))}</span>
           <select data-field="thinkingMode">
             <option value="hide" ${profile.thinkingMode !== "show" && profile.thinkingMode !== "disabled" ? "selected" : ""}>${escapeHtml(t("thinkingHide"))}</option>
@@ -339,7 +372,7 @@ function renderProfileEditor(profile) {
             ${renderReasoningLevelOptions(profile.reasoningLevel)}
           </select>
           <small>${escapeHtml(t("reasoningLevelHelp"))}</small>
-        </label>
+        </label>`}
         <label class="checkbox">
           <input data-field="useAr5iv" type="checkbox" ${profile.useAr5iv ? "checked" : ""}>
           <span>${escapeHtml(t("allowAr5iv"))}</span>
@@ -535,7 +568,7 @@ function handleProfileInput(event) {
     profile.provider = nextProvider;
     profile.baseUrl = preset.baseUrl;
     profile.model = preset.model;
-    if (nextProvider === "ollama") profile.apiKey = "";
+    if (nextProvider === "ollama" || isWebChatProvider(nextProvider)) profile.apiKey = "";
     if (!profile.name || oldPresetNames.includes(profile.name) || Object.keys(PROVIDER_PRESETS).some((provider) => providerDisplayNames(provider).includes(profile.name))) {
       profile.name = providerDisplayName(nextProvider);
     }
@@ -666,6 +699,11 @@ async function loadModelsForProfile(id, { silent = false, force = true } = {}) {
   selectedProfileId = id;
   const profile = profiles.find((item) => item.id === id);
   if (!profile) return [];
+  if (isWebChatProvider(profile.provider)) {
+    const models = [profile.model || PROVIDER_PRESETS[profile.provider]?.model].filter(Boolean);
+    if (!silent) setStatus(t("modelsLoaded", { count: models.length }));
+    return models;
+  }
   const cacheKey = buildModelLoadCacheKey(profile);
   if (!force && modelLoadCache.has(cacheKey)) {
     const cached = modelLoadCache.get(cacheKey);
@@ -706,6 +744,7 @@ async function loadModelsForProfile(id, { silent = false, force = true } = {}) {
 }
 
 function autoLoadModelsForProfile(profile, { silent = true } = {}) {
+  if (isWebChatProvider(profile?.provider)) return;
   const cacheKey = buildModelLoadCacheKey(profile);
   if (!profile.baseUrl || autoLoadedModelKeys.has(cacheKey)) return;
   autoLoadedModelKeys.add(cacheKey);
@@ -788,12 +827,16 @@ function readSelectedProfileFromDom() {
   const baseUrl = get("baseUrl")?.value || "";
   const selectedProvider = get("provider")?.value || profile.provider;
   const inferredProvider = inferProvider(baseUrl);
+  const provider = isWebChatProvider(selectedProvider)
+    ? selectedProvider
+    : (inferredProvider !== "custom" ? inferredProvider : selectedProvider);
+  const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
   Object.assign(profile, {
     name: get("name")?.value || "",
-    provider: inferredProvider !== "custom" ? inferredProvider : selectedProvider,
-    baseUrl,
-    apiKey: get("apiKey")?.value || "",
-    model: get("model")?.value || "",
+    provider,
+    baseUrl: isWebChatProvider(provider) ? preset.baseUrl : baseUrl,
+    apiKey: isWebChatProvider(provider) ? "" : (get("apiKey")?.value || ""),
+    model: get("model")?.value || preset.model || "",
     defaultContextMode: get("defaultContextMode")?.value || "fast",
     thinkingMode: normalizeThinkingMode(get("thinkingMode")?.value),
     reasoningLevel: normalizeReasoningLevel(get("reasoningLevel")?.value),
@@ -810,13 +853,17 @@ function normalizeProfiles(value, fallbackSettings) {
   if (list.length) {
     return list.map((profile) => {
       const inferredProvider = inferProvider(profile.baseUrl);
+      const provider = isWebChatProvider(profile.provider)
+        ? profile.provider
+        : (inferredProvider !== "custom" ? inferredProvider : (profile.provider || "custom"));
+      const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
       return normalizeProfileNumbers({
         id: profile.id || createId(),
         name: profile.name || profile.model || "Model",
-        provider: inferredProvider !== "custom" ? inferredProvider : (profile.provider || "custom"),
-        baseUrl: profile.baseUrl || "",
-        apiKey: profile.apiKey || "",
-        model: profile.model || "",
+        provider,
+        baseUrl: profile.baseUrl || preset.baseUrl || "",
+        apiKey: isWebChatProvider(provider) ? "" : (profile.apiKey || ""),
+        model: profile.model || preset.model || "",
         temperature: Number(profile.temperature ?? 0.2),
         maxOutputTokens: Number(profile.maxOutputTokens ?? 1600),
         inputTokenCap: Number(profile.inputTokenCap ?? inferInputTokenCap(profile.model)),
@@ -855,6 +902,7 @@ function normalizeProfiles(value, fallbackSettings) {
 
 function createProfile(provider) {
   const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
+  const isWebChat = isWebChatProvider(provider);
   return normalizeProfileNumbers({
     id: createId(),
     name: providerDisplayName(provider),
@@ -864,8 +912,8 @@ function createProfile(provider) {
     model: preset.model,
     temperature: 0.2,
     maxOutputTokens: provider === "ollama" ? 1200 : provider === "deepseek" || provider === "minimax" ? 1800 : 1600,
-    inputTokenCap: provider === "deepseek" || provider === "minimax" ? 128000 : provider === "ollama" ? 16000 : 32000,
-    maxContextChars: provider === "ollama" ? 12000 : 14000,
+    inputTokenCap: isWebChat ? 64000 : provider === "deepseek" || provider === "minimax" ? 128000 : provider === "ollama" ? 16000 : 32000,
+    maxContextChars: isWebChat ? 18000 : provider === "ollama" ? 12000 : 14000,
     historyTurns: provider === "ollama" ? 3 : 4,
     historyMessageChars: provider === "ollama" ? 1200 : 1800,
     defaultContextMode: "fast",
@@ -1174,17 +1222,21 @@ function formatUpdateTime(value) {
 
 function inferProvider(baseUrl) {
   const normalized = String(baseUrl || "").replace(/\/+$/, "").toLowerCase();
-  const host = extractProviderHost(normalized);
-  if (host.includes("minimax") || host.includes("minimaxi")) return "minimax";
-  if (host.includes("deepseek")) return "deepseek";
-  if (host.includes("openai")) return "openai";
-  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return "ollama";
   for (const [provider, preset] of Object.entries(PROVIDER_PRESETS)) {
     if (preset.baseUrl && normalized === preset.baseUrl.toLowerCase()) {
       return provider;
     }
   }
+  const host = extractProviderHost(normalized);
+  if (host.includes("minimax") || host.includes("minimaxi")) return "minimax";
+  if (host.includes("deepseek")) return "deepseek";
+  if (host.includes("openai")) return "openai";
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return "ollama";
   return "custom";
+}
+
+function isWebChatProvider(provider) {
+  return provider === "webchatChatGPT" || provider === "webchatDeepSeek";
 }
 
 function extractProviderHost(baseUrl) {
@@ -1207,17 +1259,34 @@ function setStatus(text, isError = false) {
 
 function sendMessage(payload) {
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(payload, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      if (!response?.ok) {
-        reject(new Error(response?.error || "插件后台没有返回有效结果。"));
-        return;
-      }
-      resolve(response.data);
-    });
+    let settled = false;
+    const timeoutMs = MESSAGE_TIMEOUTS[payload?.type] || MESSAGE_TIMEOUTS.default;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("插件后台响应超时。请重新加载扩展后再试。"));
+    }, timeoutMs);
+    try {
+      chrome.runtime.sendMessage(payload, (response) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (!response?.ok) {
+          reject(new Error(response?.error || "插件后台没有返回有效结果。"));
+          return;
+        }
+        resolve(response.data);
+      });
+    } catch (error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    }
   });
 }
 

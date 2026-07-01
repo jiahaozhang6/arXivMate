@@ -704,6 +704,11 @@
           const usage = formatContextUsage(meta, currentLanguage);
           setStatus(`${t("generating")}${source}${usage ? ` · ${usage}` : ""}`);
         },
+        onWebChatStatus(status) {
+          const label = status?.label || "WebChat";
+          const statusText = formatWebChatStatus(status, label);
+          if (statusText) setStatus(statusText);
+        },
         onDelta(text) {
           updatePreviewAssistant(preview, text || t("generatedFallback"));
         }
@@ -723,6 +728,15 @@
           meta: latestStreamMeta,
           partialText: error.partialText || getPreviewAssistantText(preview)
         });
+      } else if (cleanPartialGenerationText(error?.partialText)) {
+        await preserveStoppedGeneration({
+          preview,
+          mode,
+          question: userText,
+          meta: latestStreamMeta,
+          partialText: error.partialText
+        });
+        setStatus(error.message || "流式连接已断开，已保留已生成内容。", true);
       } else if (isExtensionContextInvalidated(error)) {
         renderConversation(currentConversation);
         if (mode === "ask") input.value = userText;
@@ -770,6 +784,14 @@
 
   async function buildPaperPayloadForTurn(contextMode) {
     const payload = { ...paper };
+    const selectedProfile = getSelectedProfile();
+    if (isWebChatProfile(selectedProfile) && !hasReusableWebChatSession(selectedProfile) && !payload.webchatPdf) {
+      await attachWebChatPdfPayload(payload);
+      if (!payload.webchatPdf?.base64) {
+        const detail = clean(payload.webchatPdfError || payload.contextSource);
+        throw new Error(detail || "WebChat 模式需要先把当前 PDF 作为文件附件上传，但没有准备到可上传的 PDF 文件。");
+      }
+    }
     if (contextMode !== "full" || payload.fullText) return payload;
     const maxChars = Number(getSelectedProfile()?.maxContextChars || currentSettings?.maxContextChars || 14000);
     try {
@@ -782,6 +804,55 @@
       payload.contextSource = `浏览器页面 PDF 抽取失败：${formatPdfExtractionError(error)}`;
     }
     return payload;
+  }
+
+  async function attachWebChatPdfPayload(payload) {
+    const pdfUrl = clean(payload.pdfUrl) || getCurrentPdfUrl() || (isPdfLikeUrl(location.href) ? location.href : "");
+    if (!pdfUrl || !/^https?:\/\//i.test(pdfUrl)) return;
+    try {
+      setStatus(`${t("preparingFull")} · 正在准备 PDF 文件上传到 WebChat`);
+      const result = await sendMessage({
+        type: "fetchPdfAsBase64",
+        url: pdfUrl,
+        filename: buildPdfUploadFilename(payload)
+      });
+      if (result?.base64) {
+        payload.webchatPdf = result;
+        payload.contextSource = payload.contextSource
+          ? `${payload.contextSource} + PDF 文件已准备上传`
+          : "PDF 文件已准备上传";
+      }
+    } catch (error) {
+      const message = error?.message || String(error);
+      payload.webchatPdfError = `PDF 文件上传准备失败：${message}`;
+      payload.contextSource = payload.contextSource
+        ? `${payload.contextSource}；PDF 文件上传准备失败：${message}`
+        : `PDF 文件上传准备失败：${message}`;
+    }
+  }
+
+  function buildPdfUploadFilename(payload) {
+    const base = clean(payload.title) || clean(payload.id) || extractTitleFromPdfUrl(payload.pdfUrl || location.href) || "paper";
+    const filename = base
+      .replace(/\.pdf$/i, "")
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
+      .slice(0, 120)
+      .trim() || "paper";
+    return `${filename}.pdf`;
+  }
+
+  function isWebChatProfile(profile) {
+    return profile?.provider === "webchatChatGPT" || profile?.provider === "webchatDeepSeek";
+  }
+
+  function hasReusableWebChatSession(profile) {
+    const provider = profile?.provider || "";
+    const session = currentConversation?.webchatSessions?.[buildWebChatSessionKey(provider, profile?.id)];
+    return Boolean(session?.chatUrl && session?.pdfAttached === true);
+  }
+
+  function buildWebChatSessionKey(provider, profileId) {
+    return `${provider || ""}:${profileId || "default"}`;
   }
 
   async function extractPdfTextInPage(pdfUrl, maxChars) {
@@ -1685,6 +1756,25 @@
     status.classList.toggle("is-error", Boolean(isError));
   }
 
+  function formatWebChatStatus(status, fallbackLabel = "WebChat") {
+    const label = status?.label || fallbackLabel;
+    const chars = formatTokenCount(status?.lastTextLength || 0);
+    const phase = status?.phase || "";
+    const phaseMap = {
+      pdf_uploading: "webchatPdfUploading",
+      pdf_uploaded: "webchatPdfUploaded",
+      prompt_applying: "webchatPromptApplying",
+      prompt_applied: "webchatPromptApplied",
+      prompt_before_pdf: "webchatPromptBeforePdf",
+      submitted: "webchatSubmitted",
+      waiting_for_first_token: "webchatWaitingFirstToken",
+      waiting_for_completion: "webchatWaitingCompletion"
+    };
+    const key = phaseMap[phase];
+    if (!key) return "";
+    return t(key, { label, chars });
+  }
+
   function showExtensionReloadNotice(error) {
     const text = normalizeErrorMessage(error);
     if (isExtensionContextInvalidated(error)) {
@@ -1749,8 +1839,13 @@
           }));
         }
         try {
-          port?.disconnect();
+          port?.postMessage({ type: "cancelStream" });
         } catch {}
+        setTimeout(() => {
+          try {
+            port?.disconnect();
+          } catch {}
+        }, 800);
       };
       try {
         if (!isRuntimeAvailable()) throw createExtensionContextError();
@@ -1792,6 +1887,10 @@
           callbacks.onMeta?.(message);
           return;
         }
+        if (message?.type === "webchatStatus") {
+          callbacks.onWebChatStatus?.(message);
+          return;
+        }
         if (message?.type === "delta") {
           latestText = message.fullText || `${latestText}${message.text || ""}`;
           callbacks.onDelta?.(latestText);
@@ -1809,7 +1908,9 @@
         if (message?.type === "error") {
           settled = true;
           activeStreamCancel = null;
-          reject(new Error(message.error || "流式请求失败。"));
+          reject(Object.assign(new Error(message.error || "流式请求失败。"), {
+            partialText: message.partialText || latestText
+          }));
           try {
             port.disconnect();
           } catch {}
@@ -1819,7 +1920,9 @@
       port.onDisconnect.addListener(() => {
         if (cancelled) return;
         if (!settled) {
-          reject(new Error(getRuntimeLastErrorMessage() || "流式连接已断开，请重试。"));
+          reject(Object.assign(new Error(getRuntimeLastErrorMessage() || "流式连接已断开，请重试。"), {
+            partialText: latestText
+          }));
         }
       });
 
@@ -2090,7 +2193,7 @@
         applyFrameLayout(true);
       }
       if (event.data?.type === "alc-extract-parent-pdf-text") {
-        handleParentPdfTextRequest(event, frame);
+        handleParentPdfTextRequest(event, frame, paperData);
       }
       if (event.data?.type === "alc-resize-start") {
         startFrameGesture("resize", {
@@ -2375,7 +2478,7 @@ function sendRuntimeMessage(payload) {
       });
     }
 
-    async function handleParentPdfTextRequest(event, frameNode) {
+    async function handleParentPdfTextRequest(event, frameNode, sourcePaper) {
       if (event.source !== frameNode.contentWindow) return;
       const requestId = event.data?.requestId || "";
       try {
@@ -2392,7 +2495,7 @@ function sendRuntimeMessage(payload) {
           };
         }
         if (!extraction && !isIeeeStampPdfUrl(location.href)) {
-          const pdfUrl = getCurrentPdfUrl() || paperData.pdfUrl || location.href;
+          const pdfUrl = getCurrentPdfUrl() || sourcePaper?.pdfUrl || location.href;
           extraction = await extractPdfTextViaPdfJs(pdfUrl, maxChars);
           extraction.source = "父页面 PDF.js 正文抽取 + 页面元数据";
         }

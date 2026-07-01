@@ -425,8 +425,9 @@ window.ArxivMateMath = (() => {
     if (isInsideExistingMath(source, offset)) return false;
     if (/[A-Za-z]\w*_[A-Za-z0-9]+/.test(text)) return true;
     if (/[A-Za-z]\w*\^[A-Za-z0-9]+/.test(text)) return true;
-    if (/[A-Za-z]+\([^)]*[|=+\-*/_][^)]*\)/.test(text)) return true;
-    if (/(->|←|→|=|\+|·|\*)/.test(text) && /[A-Za-z]/.test(text) && /[_^()]/.test(text)) return true;
+    if (/\\[A-Za-z]+/.test(text)) return true;
+    if (/[A-Za-z]\([^)]*[|=+\-*/_][^)]*\)/.test(text) && /[_^\\]|\b(?:hat|theta|alpha|beta|gamma|delta|sum|prod|frac)\b/.test(text)) return true;
+    if (/(->|←|→|=|\+|·|\*)/.test(text) && /[A-Za-z]/.test(text) && /[_^()]/.test(text) && /\\|[_^]|\b(?:frac|sum|prod|theta|hat|mathbb|operatorname)\b/.test(text)) return true;
     return false;
   }
 

@@ -23,7 +23,7 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页、
 
 ## 当前状态
 
-- 当前版本：`0.1.14`
+- 当前版本：`0.1.15`
 - 安装方式：Chrome 未打包扩展
 - Chrome Web Store：暂未发布
 - 主要语言：支持跟随系统、中文、英文；会同时影响扩展界面和 LLM 输出语言
@@ -45,6 +45,7 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页、
 - **PDF/动态全文抽取**：优先读取站点正文接口或浏览器页面文本层；普通 PDF 再用 PDF.js 从当前 URL/range 抽取正文文本作为上下文。
 - **ar5iv fallback**：PDF 文本不可用时可回退到 ar5iv HTML 正文。
 - **多模型 Profile 管理**：初始化不预置模型；用户可按供应商新增 OpenAI、DeepSeek、MiniMax、Ollama 或自定义 OpenAI-compatible 配置，设置页支持编辑、复制、删除、测试连接和显示/隐藏 API Key。
+- **WebChat 模式**：参考 `llm-for-zotero` / `sync-for-zotero` 的网页桥接思路，可新增 `ChatGPT 网页版` 或 `DeepSeek 网页版` Profile，使用你已登录的网页聊天作为后端，不需要 API Key。
 - **可中断生成**：模型回复过程中，发送按钮会变成 `停止`；停止后已生成内容会保留并写入本地对话历史。
 - **中英文界面**：语言设置会同步影响助手面板、设置页、复盘库、popup 和 LLM prompt。
 - **背景主题设置**：助手面板、设置页和复盘库支持跟随系统、浅色、深色和护眼背景。
@@ -74,13 +75,13 @@ arXivMate 是一个本地优先的 Chrome MV3 扩展。打开 arXiv 摘要页、
 推荐普通用户使用这个方法。稳定版 ZIP 来自 GitHub Release，不会随着 `main` 分支变化而变化。
 
 1. 打开 [Releases](https://github.com/jiahaozhang6/arXivMate/releases)
-2. 选择最新稳定 Release，例如 `v0.1.14`
+2. 选择最新稳定 Release，例如 `v0.1.15`
 3. 下载该 Release 的 `Source code (zip)`
-4. 解压 ZIP，得到 `arXivMate-0.1.14` 文件夹
+4. 解压 ZIP，得到 `arXivMate-0.1.15` 文件夹
 5. 打开 Chrome：`chrome://extensions`
 6. 打开右上角 `开发者模式`
 7. 点击 `加载已解压的扩展程序`
-8. 选择解压后的 `arXivMate-0.1.14` 文件夹
+8. 选择解压后的 `arXivMate-0.1.15` 文件夹
 
 也可以直接打开最新稳定 Release：
 
@@ -113,6 +114,15 @@ git clone https://github.com/jiahaozhang6/arXivMate.git
 6. 点击页面右下角 `AI` 开始使用
 
 也可以直接打开网页上的普通 PDF 使用；如果要读取本地 `file://` PDF，请在 `chrome://extensions` 的 arXivMate 详情页打开“允许访问文件网址”。
+
+### 使用网页版 ChatGPT / DeepSeek
+
+1. 在设置页新增模型，供应商选择 `ChatGPT 网页版` 或 `DeepSeek 网页版`。
+2. 不需要填写 API Key；点击 `测试此模型` 会打开对应网页并检查输入框。
+3. 确认你已经在 `chatgpt.com` 或 `chat.deepseek.com` 登录。
+4. 回到论文页面，在聊天面板的模型下拉框中选择该 WebChat Profile。
+
+WebChat 模式会把当前论文上下文和问题发送到对应网页聊天页，并把回答保存回 arXivMate 本地历史。它依赖目标网页 DOM 和流式接口，若 ChatGPT/DeepSeek 改版，可能需要更新扩展适配。
 
 ## 保持更新
 
@@ -158,12 +168,12 @@ git merge upstream/main
 当前推荐 Release 描述：
 
 ```text
-arXivMate v0.1.14 - IEEE and dynamic PDF reading
+arXivMate v0.1.15 - WebChat PDF attachment and thinking display
 
-This release improves IEEE Xplore and dynamic PDF reading. IEEE `stamp.jsp?arnumber=...` pages now prefer the IEEE REST full-text endpoint, non-`.pdf` PDF entry URLs are detected more broadly, and stopped generations keep the already streamed text in local chat history.
+This release fixes WebChat paper reading for ChatGPT Web and DeepSeek Web. PDF files are now uploaded as verified web attachments before the first paper turn, verified attachment sessions are reused safely, and ChatGPT/DeepSeek thinking or reasoning output is folded into a collapsible block instead of mixing into the final answer.
 ```
 
-用户侧更新检查以 GitHub Release 为准。发布新版本时请先更新 `manifest.json` 版本号，再创建同版本 tag 和 GitHub Release，例如 `v0.1.14`。README 和插件内下载按钮给普通用户的链接都应指向稳定 Release，而不是 `main` 分支 ZIP。
+用户侧更新检查以 GitHub Release 为准。发布新版本时请先更新 `manifest.json` 版本号，再创建同版本 tag 和 GitHub Release，例如 `v0.1.15`。README 和插件内下载按钮给普通用户的链接都应指向稳定 Release，而不是 `main` 分支 ZIP。
 
 ## 模型配置
 
@@ -389,7 +399,7 @@ It is not just a “summarize this paper” button. arXivMate is designed as a l
 
 ## Status
 
-- Version: `0.1.14`
+- Version: `0.1.15`
 - Installation: unpacked Chrome extension
 - Chrome Web Store: not published yet
 - Language: system default, Chinese, or English; controls both the extension UI and LLM output language
@@ -411,6 +421,7 @@ It is not just a “summarize this paper” button. arXivMate is designed as a l
 - **PDF/dynamic full-text extraction**: prefers site full-text endpoints or browser-page text layers; ordinary PDFs then use PDF.js range extraction from the current URL.
 - **ar5iv fallback**: when PDF text extraction fails, arXivMate can fall back to ar5iv HTML text.
 - **Multiple model profile management**: new installs start with no prefilled model profiles; users can add OpenAI, DeepSeek, MiniMax, Ollama, or custom OpenAI-compatible profiles, then edit, duplicate, delete, test connections, and show/hide API keys.
+- **WebChat mode**: inspired by `llm-for-zotero` / `sync-for-zotero`, you can add `ChatGPT Web` or `DeepSeek Web` profiles and use your logged-in web chat as the backend without an API key.
 - **Interruptible generation**: while a model is replying, the Send button becomes `Stop`; stopped turns keep already streamed text and save it to local chat history.
 - **Chinese/English UI**: the language setting applies to the assistant panel, settings page, review library, popup, and LLM prompt.
 - **Theme setting**: the assistant panel, settings page, and review library support system, light, dark, and sepia backgrounds.
@@ -440,13 +451,13 @@ arXivMate is currently installed through Chrome’s “Load unpacked” flow.
 Recommended for most users. Stable ZIP archives come from GitHub Releases, so they do not move when the `main` branch changes.
 
 1. Open [Releases](https://github.com/jiahaozhang6/arXivMate/releases)
-2. Choose the latest stable Release, for example `v0.1.14`
+2. Choose the latest stable Release, for example `v0.1.15`
 3. Download `Source code (zip)` for that Release
-4. Unzip it to get an `arXivMate-0.1.14` folder
+4. Unzip it to get an `arXivMate-0.1.15` folder
 5. Open Chrome: `chrome://extensions`
 6. Enable `Developer mode`
 7. Click `Load unpacked`
-8. Select the unzipped `arXivMate-0.1.14` folder
+8. Select the unzipped `arXivMate-0.1.15` folder
 
 Direct link for the latest stable Release:
 
@@ -479,6 +490,15 @@ Then:
 6. Click `AI` in the bottom-right corner of the page
 
 Ordinary web PDF links also work. To use local `file://` PDFs, enable “Allow access to file URLs” on the arXivMate details page in `chrome://extensions`.
+
+### Use ChatGPT / DeepSeek Web
+
+1. Add a model in settings and choose `ChatGPT Web` or `DeepSeek Web`.
+2. No API key is required; `Test this model` opens the web page and checks the composer.
+3. Make sure you are logged in on `chatgpt.com` or `chat.deepseek.com`.
+4. Return to the paper page and select that WebChat profile in the chat model dropdown.
+
+WebChat mode sends the current paper context and question to the target web chat page, then saves the answer back into arXivMate local history. It depends on the target site's DOM and streaming endpoints, so ChatGPT/DeepSeek UI changes may require adapter updates.
 
 ## Staying Updated
 
@@ -524,12 +544,12 @@ git merge upstream/main
 Recommended Release description:
 
 ```text
-arXivMate v0.1.14 - IEEE and dynamic PDF reading
+arXivMate v0.1.15 - WebChat PDF attachment and thinking display
 
-This release improves IEEE Xplore and dynamic PDF reading. IEEE `stamp.jsp?arnumber=...` pages now prefer the IEEE REST full-text endpoint, non-`.pdf` PDF entry URLs are detected more broadly, and stopped generations keep the already streamed text in local chat history.
+This release fixes WebChat paper reading for ChatGPT Web and DeepSeek Web. PDF files are now uploaded as verified web attachments before the first paper turn, verified attachment sessions are reused safely, and ChatGPT/DeepSeek thinking or reasoning output is folded into a collapsible block instead of mixing into the final answer.
 ```
 
-User-side update checks are based on GitHub Releases. When publishing a new version, update `manifest.json` first, then create a matching tag and GitHub Release such as `v0.1.14`. README links and in-extension download buttons for regular users should point to stable Releases, not the moving `main` branch ZIP.
+User-side update checks are based on GitHub Releases. When publishing a new version, update `manifest.json` first, then create a matching tag and GitHub Release such as `v0.1.15`. README links and in-extension download buttons for regular users should point to stable Releases, not the moving `main` branch ZIP.
 
 ## Model Configuration
 

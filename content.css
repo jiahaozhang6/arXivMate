@@ -626,11 +626,15 @@
 }
 
 .alc-message-body .am-math-inline {
-  display: inline-block;
-  max-width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  vertical-align: -0.2em;
+  display: inline;
+  max-width: none;
+  overflow: visible;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+
+.alc-message-body .am-math-inline .katex {
+  white-space: nowrap;
 }
 
 .alc-message-body .am-math-display {
@@ -720,6 +724,25 @@
   max-width: 100%;
   height: auto;
   border-radius: 6px;
+}
+
+.alc-message-body .am-thinking-block {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--alc-line);
+  border-radius: 8px;
+  background: var(--alc-pre);
+  color: var(--alc-muted);
+}
+
+.alc-message-body .am-thinking-block summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: var(--alc-text);
+}
+
+.alc-message-body .am-thinking-block[open] summary {
+  margin-bottom: 8px;
 }
 
 .alc-message.is-streaming .alc-message-body::after {

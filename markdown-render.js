@@ -43,6 +43,7 @@ window.ArxivMateMarkdown = (() => {
     installImageAttributes(renderer);
     installTableWrapper(renderer);
     installTaskLists(renderer);
+    installThinkingBlocks(renderer);
     return renderer;
   }
 
@@ -109,6 +110,48 @@ window.ArxivMateMarkdown = (() => {
     });
   }
 
+  function installThinkingBlocks(md) {
+    md.block.ruler.before("fence", "arxivmate_thinking_block", (state, startLine, endLine, silent) => {
+      const start = state.bMarks[startLine] + state.tShift[startLine];
+      const max = state.eMarks[startLine];
+      const marker = state.src.slice(start, max).trim();
+      if (!marker.startsWith(":::arxivmate-thinking")) return false;
+      if (silent) return true;
+
+      const title = marker.slice(":::arxivmate-thinking".length).trim() || "Thinking";
+      let nextLine = startLine + 1;
+      while (nextLine < endLine) {
+        const lineStart = state.bMarks[nextLine] + state.tShift[nextLine];
+        const lineMax = state.eMarks[nextLine];
+        if (state.src.slice(lineStart, lineMax).trim() === ":::") break;
+        nextLine += 1;
+      }
+      const content = state.getLines(startLine + 1, nextLine, state.blkIndent, false);
+
+      const open = state.push("arxivmate_thinking_open", "details", 1);
+      open.block = true;
+      open.info = title;
+
+      const summary = state.push("arxivmate_thinking_summary", "summary", 0);
+      summary.block = true;
+      summary.content = title;
+
+      state.md.block.parse(content, state.md, state.env, state.tokens);
+
+      const close = state.push("arxivmate_thinking_close", "details", -1);
+      close.block = true;
+      state.line = nextLine < endLine ? nextLine + 1 : nextLine;
+      return true;
+    }, {
+      alt: ["paragraph", "reference", "blockquote", "list"]
+    });
+
+    md.renderer.rules.arxivmate_thinking_open = () => '<details class="am-thinking-block">';
+    md.renderer.rules.arxivmate_thinking_summary = (tokens, index) =>
+      `<summary>${escapeHtml(tokens[index].content || "Thinking")}</summary>`;
+    md.renderer.rules.arxivmate_thinking_close = () => "</details>";
+  }
+
   function offsetHeadingTag(tag, offset) {
     const current = Number(String(tag || "").replace(/^h/i, ""));
     if (!Number.isFinite(current)) return tag;
@@ -125,6 +168,7 @@ window.ArxivMateMarkdown = (() => {
     const lines = String(markdown || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
     const html = [];
     let paragraph = [];
+    let thinking = null;
 
     const flushParagraph = () => {
       if (!paragraph.length) return;
@@ -132,9 +176,32 @@ window.ArxivMateMarkdown = (() => {
       paragraph = [];
     };
 
+    const flushThinking = () => {
+      if (!thinking) return;
+      flushParagraph();
+      html.push(`<details class="am-thinking-block"><summary>${escapeHtml(thinking.title || "Thinking")}</summary>${fallbackToHtml(thinking.lines.join("\n"), options)}</details>`);
+      thinking = null;
+    };
+
     for (const rawLine of lines) {
       const line = rawLine.trimEnd();
       const trimmed = line.trim();
+      if (thinking) {
+        if (trimmed === ":::") {
+          flushThinking();
+        } else {
+          thinking.lines.push(line);
+        }
+        continue;
+      }
+      if (trimmed.startsWith(":::arxivmate-thinking")) {
+        flushParagraph();
+        thinking = {
+          title: trimmed.slice(":::arxivmate-thinking".length).trim() || "Thinking",
+          lines: []
+        };
+        continue;
+      }
       if (!trimmed) {
         flushParagraph();
         continue;
@@ -151,6 +218,7 @@ window.ArxivMateMarkdown = (() => {
       paragraph.push(trimmed);
     }
 
+    flushThinking();
     flushParagraph();
     return html.join("");
   }

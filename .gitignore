@@ -16,3 +16,6 @@ build/
 
 web-ext-artifacts/
 *.zip
+*.crx
+*.pem
+.local-keys/

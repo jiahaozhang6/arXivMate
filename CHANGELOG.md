@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.15 - 2026-07-01
+
+WebChat PDF attachment and thinking display release.
+
+- Add ChatGPT Web and DeepSeek Web bridge support for real PDF attachment workflows, including attachment-button and upload-menu based file selection.
+- Require verified `pdfAttached` WebChat sessions before reusing a chat, so old text-only sessions no longer skip PDF upload.
+- Persist verified WebChat attachment metadata locally, including filename, size, and attachment timestamp, while preserving existing model settings and paper chat history.
+- Fold ChatGPT/DeepSeek thinking or reasoning output into a collapsible thinking block and prevent thinking DOM nodes from being captured as the final answer.
+- Add a Markdown fallback renderer for arXivMate thinking blocks so folded reasoning still works if the full Markdown renderer is unavailable.
+
 ## 0.1.14 - 2026-06-30
 
 IEEE and dynamic PDF reading release.

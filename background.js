@@ -31,6 +31,8 @@ const SETTINGS_MIRROR_KEY = "settingsMirror";
 const MODEL_PROFILES_LOCAL_KEY = "modelProfiles";
 const BACKUP_FORMAT = "arXivMate.localData";
 const BACKUP_VERSION = 1;
+const WEBCHAT_PDF_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+const WEBCHAT_BRIDGE_VERSION = 12;
 
 const PROVIDER_PRESETS = {
   openai: {
@@ -49,9 +51,32 @@ const PROVIDER_PRESETS = {
     baseUrl: "http://localhost:11434/v1",
     model: "llama3.1"
   },
+  webchatChatGPT: {
+    baseUrl: "webchat://chatgpt",
+    model: "ChatGPT Web"
+  },
+  webchatDeepSeek: {
+    baseUrl: "webchat://deepseek",
+    model: "DeepSeek Web"
+  },
   custom: {
     baseUrl: "",
     model: ""
+  }
+};
+
+const WEBCHAT_PROVIDERS = {
+  webchatChatGPT: {
+    id: "chatgpt",
+    label: "ChatGPT Web",
+    homeUrl: "https://chatgpt.com/",
+    urlPattern: "https://chatgpt.com/*"
+  },
+  webchatDeepSeek: {
+    id: "deepseek",
+    label: "DeepSeek Web",
+    homeUrl: "https://chat.deepseek.com/",
+    urlPattern: "https://chat.deepseek.com/*"
   }
 };
 
@@ -96,13 +121,21 @@ chrome.runtime.onConnect.addListener((port) => {
   const controller = new AbortController();
   port.onDisconnect.addListener(() => controller.abort());
   port.onMessage.addListener((message) => {
+    if (message?.type === "cancelStream") {
+      controller.abort();
+      return;
+    }
     if (message?.type !== "summarizePaperStream") return;
     streamSummarizePaper(message, port, controller.signal)
       .then((data) => postPort(port, { type: "done", data }))
       .catch((error) => {
         if (controller.signal.aborted) return;
         console.error(error);
-        postPort(port, { type: "error", error: error.message || String(error) });
+        postPort(port, {
+          type: "error",
+          error: error.message || String(error),
+          partialText: error.partialText || ""
+        });
       });
   });
 });
@@ -115,7 +148,7 @@ function postPort(port, payload) {
   }
 }
 
-async function handleMessage(message) {
+async function handleMessage(message, sender = {}) {
   switch (message?.type) {
     case undefined:
     case null:
@@ -171,6 +204,8 @@ async function handleMessage(message) {
       return checkForUpdate({ force: message.force === true });
     case "probePdfUrl":
       return probePdfUrl(message.url);
+    case "fetchPdfAsBase64":
+      return fetchPdfAsBase64(message.url, message.filename);
     default:
       return createIgnoredMessageResult(message);
   }
@@ -249,6 +284,102 @@ function isPdfResponse(contentType, disposition, url, hasPdfMagic) {
     /\.pdf(?:[?#]|$)/i.test(normalizeString(disposition)) ||
     /\.pdf(?:[?#]|$)/i.test(normalizeString(url)) ||
     Boolean(hasPdfMagic);
+}
+
+async function fetchPdfAsBase64(url, requestedFilename = "") {
+  const target = normalizeString(url);
+  if (!isHttpUrl(target)) throw new Error("当前链接不是可下载的 HTTP(S) PDF 地址。");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
+  try {
+    const response = await fetch(target, {
+      method: "GET",
+      redirect: "follow",
+      cache: "no-store",
+      credentials: "include",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/pdf,*/*;q=0.8"
+      }
+    });
+    if (!response.ok) throw new Error(`PDF 下载失败：HTTP ${response.status}`);
+    const contentType = response.headers.get("content-type") || "";
+    const disposition = response.headers.get("content-disposition") || "";
+    const finalUrl = response.url || target;
+    const length = Number(response.headers.get("content-length") || 0);
+    if (length > WEBCHAT_PDF_UPLOAD_MAX_BYTES) {
+      throw new Error(`PDF 文件过大（${formatBytes(length)}），超过 ${formatBytes(WEBCHAT_PDF_UPLOAD_MAX_BYTES)} 的网页上传保护上限。`);
+    }
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > WEBCHAT_PDF_UPLOAD_MAX_BYTES) {
+      throw new Error(`PDF 文件过大（${formatBytes(buffer.byteLength)}），超过 ${formatBytes(WEBCHAT_PDF_UPLOAD_MAX_BYTES)} 的网页上传保护上限。`);
+    }
+    const prefix = new TextDecoder("latin1").decode(buffer.slice(0, 16));
+    if (!isPdfResponse(contentType, disposition, finalUrl, prefix.startsWith("%PDF"))) {
+      throw new Error("当前链接返回的不是原始 PDF 字节，无法直接上传到 WebChat。");
+    }
+    return {
+      base64: arrayBufferToBase64(buffer),
+      filename: sanitizePdfFilename(requestedFilename) || filenameFromDisposition(disposition) || filenameFromUrl(finalUrl) || "paper.pdf",
+      url: finalUrl,
+      size: buffer.byteLength,
+      contentType
+    };
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("PDF 下载超时，无法上传到 WebChat。");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function filenameFromDisposition(disposition) {
+  const value = normalizeString(disposition);
+  const encoded = value.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encoded) {
+    try {
+      return sanitizePdfFilename(decodeURIComponent(encoded[1].replace(/["']/g, "")));
+    } catch {}
+  }
+  const plain = value.match(/filename="?([^";]+)"?/i);
+  return sanitizePdfFilename(plain?.[1] || "");
+}
+
+function filenameFromUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const part = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "");
+    return sanitizePdfFilename(part);
+  } catch {
+    return sanitizePdfFilename(String(url || "").split(/[\\/]/).pop() || "");
+  }
+}
+
+function sanitizePdfFilename(value) {
+  const cleaned = normalizeString(value)
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
+    .replace(/\s+/g, " ")
+    .slice(0, 160)
+    .trim();
+  if (!cleaned) return "";
+  return /\.pdf$/i.test(cleaned) ? cleaned : `${cleaned}.pdf`;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
 }
 
 function isHttpUrl(value) {
@@ -365,16 +496,50 @@ async function saveSettings(settings) {
   });
   notifyPaperTabsSettingsChanged(next);
 
-  try {
-    await chrome.storage.sync.set({ settings: persisted });
-    return next;
-  } catch (error) {
-    console.warn("arXivMate settings sync copy failed:", error);
+  const syncWarning = await mirrorSettingsToSync(persisted);
+  if (syncWarning) {
     return {
       ...next,
-      storageWarning: error.message || String(error)
+      storageWarning: syncWarning
     };
   }
+  return next;
+}
+
+async function mirrorSettingsToSync(persisted) {
+  try {
+    await promiseWithTimeout(
+      chrome.storage.sync.set({ settings: persisted }),
+      3000,
+      "Chrome sync copy timed out"
+    );
+    return "";
+  } catch (error) {
+    console.warn("arXivMate settings sync copy failed:", error);
+    return error.message || String(error);
+  }
+}
+
+function promiseWithTimeout(promise, timeoutMs, message) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(message));
+    }, timeoutMs);
+    Promise.resolve(promise).then((value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    }, (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
 }
 
 async function exportLocalData() {
@@ -502,6 +667,9 @@ async function notifyPaperTabsSettingsChanged(settings) {
 async function testModelProfile(profile) {
   const normalized = normalizeModelProfile(profile);
   validateModelProfile(normalized);
+  if (isWebChatProvider(normalized.provider)) {
+    return testWebChatProfile(normalized);
+  }
   const settings = {
     ...DEFAULT_SETTINGS,
     ...flattenProfile(normalized),
@@ -528,6 +696,13 @@ async function testModelProfile(profile) {
 
 async function listModelsForProfile(profile) {
   const normalized = normalizeModelProfile(profile);
+  if (isWebChatProvider(normalized.provider)) {
+    return {
+      profileId: normalized.id,
+      baseUrl: normalized.baseUrl,
+      models: [normalized.model || getWebChatConfig(normalized.provider).label]
+    };
+  }
   if (!normalized?.baseUrl) throw new Error("请先填写 API Base URL。");
   const endpoint = buildModelsEndpoint(normalized.baseUrl);
   const response = await fetch(endpoint, {
@@ -559,7 +734,9 @@ async function listModelsForProfile(profile) {
 
 async function summarizePaper({ paper, mode = "quick", question = "", persist = true, contextMode = "auto", profileId = "" }) {
   const prepared = await prepareSummarizePaper({ paper, mode, question, persist, contextMode, profileId });
-  const result = await callChatCompletions(prepared.settings, prepared.messages);
+  const result = isWebChatProvider(prepared.settings.provider)
+    ? await callWebChat(prepared.settings, prepared.messages, prepared.webchatPdf, prepared.normalizedPaper, prepared.webchatSession)
+    : await callChatCompletions(prepared.settings, prepared.messages);
   return finishSummarizePaper(prepared, result);
 }
 
@@ -574,7 +751,9 @@ async function streamSummarizePaper(message, port, signal) {
   });
   postPort(port, {
     type: "meta",
-    source: prepared.paperContext.contextSource,
+    source: prepared.webchatSession?.chatUrl
+      ? `${prepared.paperContext.contextSource}；复用 WebChat 会话`
+      : prepared.paperContext.contextSource,
     model: prepared.settings.model,
     contextTokens: prepared.inputBudget.estimatedAfterTokens,
     contextWindow: prepared.inputBudget.limitTokens,
@@ -582,15 +761,32 @@ async function streamSummarizePaper(message, port, signal) {
   });
 
   let streamed = "";
-  const result = await callChatCompletionsStream(
-    prepared.settings,
-    prepared.messages,
-    (delta) => {
-      streamed += delta;
-      postPort(port, { type: "delta", text: delta, fullText: streamed });
-    },
-    signal
-  );
+  const result = isWebChatProvider(prepared.settings.provider)
+    ? await callWebChatStream(
+      prepared.settings,
+      prepared.messages,
+      prepared.webchatPdf,
+      prepared.normalizedPaper,
+      prepared.webchatSession,
+      (fullText) => {
+        streamed = fullText;
+        postPort(port, { type: "delta", text: fullText, fullText: streamed });
+      },
+      signal,
+      (status) => postPort(port, {
+        type: "webchatStatus",
+        ...status
+      })
+    )
+    : await callChatCompletionsStream(
+      prepared.settings,
+      prepared.messages,
+      (delta) => {
+        streamed += delta;
+        postPort(port, { type: "delta", text: delta, fullText: streamed });
+      },
+      signal
+    );
 
   return finishSummarizePaper(prepared, result);
 }
@@ -604,6 +800,10 @@ async function prepareSummarizePaper({ paper, mode = "quick", question = "", per
   const existingConversation = persist && normalizedPaper.id
     ? await getConversation(normalizedPaper.id)
     : null;
+  const webchatSession = isWebChatProvider(settings.provider)
+    ? getReusableWebChatSession(existingConversation, settings)
+    : null;
+  const webchatPdf = webchatSession?.pdfAttached ? null : normalizedPaper.webchatPdf;
   const conversationMessages = mode === "ask"
     ? getRecentConversationMessages(existingConversation?.messages || [], settings)
     : [];
@@ -625,6 +825,8 @@ async function prepareSummarizePaper({ paper, mode = "quick", question = "", per
     normalizedPaper,
     paperContext,
     existingConversation,
+    webchatSession,
+    webchatPdf,
     messages,
     inputBudget,
     mode,
@@ -634,7 +836,9 @@ async function prepareSummarizePaper({ paper, mode = "quick", question = "", per
 }
 
 async function finishSummarizePaper(prepared, result) {
-  const answer = cleanModelOutput(result, prepared.settings);
+  const resultText = typeof result === "object" && result !== null ? result.text : result;
+  const answer = cleanModelOutput(resultText, prepared.settings);
+  const webchatSession = typeof result === "object" && result !== null ? result.webchatSession : null;
   const generatedAt = new Date().toISOString();
   let conversation = prepared.existingConversation;
   if (prepared.persist && prepared.normalizedPaper.id) {
@@ -646,6 +850,7 @@ async function finishSummarizePaper(prepared, result) {
       source: prepared.paperContext.contextSource,
       settings: prepared.settings,
       inputBudget: prepared.inputBudget,
+      webchatSession,
       createdAt: generatedAt
     });
   }
@@ -659,6 +864,39 @@ async function finishSummarizePaper(prepared, result) {
     generatedAt,
     conversation
   };
+}
+
+async function testWebChatProfile(profile) {
+  const config = getWebChatConfig(profile.provider);
+  const tab = await ensureWebChatStatusTab(config);
+  const status = await ensureWebChatBridge(tab.id);
+  if (!status?.composerFound) {
+    throw new Error(`${config.label} 页面已打开，但没有找到输入框。请确认已经登录后重试。`);
+  }
+  const diagnostic = await sendTabMessage(tab.id, { type: "ARXIVMATE_WEBCHAT_DIAGNOSE" }).catch((error) => ({
+    ok: false,
+    error: error.message || String(error)
+  }));
+  if (!diagnostic?.ok) {
+    throw new Error(`${config.label} 桥接检查失败：${diagnostic?.error || JSON.stringify(diagnostic)}`);
+  }
+  return {
+    profileId: profile.id,
+    profileName: profile.name,
+    model: profile.model,
+    text: `${config.label} OK（${diagnostic.site || config.id}，网络桥接 ${diagnostic.networkHookActive ? "已就绪" : "未确认"}）`
+  };
+}
+
+async function ensureWebChatStatusTab(config) {
+  const tabs = await chrome.tabs.query({ url: config.urlPattern });
+  let tab = tabs.find((item) => item.id) || null;
+  if (!tab) {
+    tab = await chrome.tabs.create({ url: config.homeUrl, active: true });
+  }
+  if (!tab.id) throw new Error(`无法打开 ${config.label} 网页。`);
+  await waitForTabComplete(tab.id);
+  return chrome.tabs.get(tab.id);
 }
 
 async function appendPartialConversationTurn(message) {
@@ -716,6 +954,470 @@ async function callChatCompletionsStream(settings, messages, onDelta, signal) {
   const cleaned = cleanModelOutput(content, settings);
   if (cleaned) onDelta(cleaned);
   return cleaned;
+}
+
+async function callWebChat(settings, messages, webchatPdf = null, paper = null, webchatSession = null) {
+  let latest = "";
+  const result = await callWebChatStream(settings, messages, webchatPdf, paper, webchatSession, (text) => {
+    latest = text || latest;
+  });
+  return result || latest;
+}
+
+async function callWebChatStream(settings, messages, webchatPdf, paper, webchatSession, onDelta, signal, onStatus) {
+  const webchat = getWebChatConfig(settings.provider);
+  if (!webchatSession?.pdfAttached && !webchatPdf?.base64) {
+    throw new Error(`${webchat.label} 首次分析当前论文必须先准备可上传的 PDF 文件；未检测到已验证的网页附件会话，也没有可上传 PDF。`);
+  }
+  const prompt = buildWebChatPrompt(messages, settings, { webchatPdf, paper, webchatSession });
+  const tab = await ensureWebChatTab(webchat, webchatSession?.chatUrl || "");
+  await ensureWebChatBridge(tab.id);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let latestText = "";
+    let latestThinking = "";
+    let latestFormattedText = "";
+    let port = null;
+
+    const cleanup = ({ disconnect = false } = {}) => {
+      if (signal) signal.removeEventListener("abort", abort);
+      if (disconnect) {
+        try {
+          port?.disconnect();
+        } catch {}
+      }
+    };
+
+    const finish = (callback, value, options = {}) => {
+      if (settled) return;
+      settled = true;
+      cleanup(options);
+      callback(value);
+    };
+
+    const abort = () => {
+      try {
+        port?.postMessage({ type: "STOP" });
+      } catch {}
+      const partialText = formatWebChatFinalText(latestText, latestThinking, settings);
+      finish(reject, Object.assign(new Error("generation-aborted"), {
+        name: "AbortError",
+        partialText
+      }));
+      setTimeout(() => {
+        try {
+          port?.disconnect();
+        } catch {}
+      }, 800);
+    };
+
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+
+    try {
+      port = chrome.tabs.connect(tab.id, { name: `arxivmate-webchat-v${WEBCHAT_BRIDGE_VERSION}` });
+    } catch (error) {
+      finish(reject, error);
+      return;
+    }
+
+    port.onMessage.addListener((message) => {
+      if (settled) return;
+      if (message?.type === "phase" || message?.type === "heartbeat") {
+        onStatus?.({
+          phase: message.phase || "",
+          site: message.site || webchat.id,
+          label: webchat.label,
+          elapsedMs: Number(message.elapsedMs) || 0,
+          lastTextLength: Number(message.lastTextLength) || latestText.length || 0,
+          diagnostic: message.diagnostic || null
+        });
+        return;
+      }
+      if (message?.type === "delta") {
+        latestText = normalizeTextBlock(message.fullText || message.text || latestText);
+        latestThinking = normalizeTextBlock(message.thinking || latestThinking);
+        if (latestText) {
+          latestFormattedText = formatWebChatFinalText(latestText, latestThinking, settings);
+          onDelta(latestFormattedText);
+        }
+        return;
+      }
+      if (message?.type === "terminal") {
+        const text = normalizeTextBlock(message.text || latestText);
+        latestThinking = normalizeTextBlock(message.thinking || latestThinking);
+        if (!text && !latestThinking) {
+          finish(reject, new Error(`${webchat.label} 没有返回可读取的内容。`), { disconnect: true });
+          return;
+        }
+        const finalText = formatWebChatFinalText(text, latestThinking, settings);
+        if (finalText !== latestFormattedText) onDelta(finalText);
+        const nextSession = normalizeWebChatSession({
+          provider: settings.provider,
+          profileId: settings.requestProfileId,
+          profileName: settings.requestProfileName,
+          model: settings.model,
+          chatUrl: message.chatUrl || message.remoteChatUrl || "",
+          chatId: message.chatId || message.remoteChatId || "",
+          label: webchat.label,
+          pdfAttached: message.pdfAttached === true || webchatSession?.pdfAttached === true,
+          pdfFilename: message.pdfFilename || webchatSession?.pdfFilename || "",
+          pdfSize: message.pdfSize || webchatSession?.pdfSize || 0,
+          pdfAttachedAt: message.pdfAttached === true ? new Date().toISOString() : webchatSession?.pdfAttachedAt || ""
+        }) || null;
+        finish(resolve, {
+          text: finalText,
+          webchatSession: nextSession
+        });
+        setTimeout(() => {
+          try {
+            port?.disconnect();
+          } catch {}
+        }, 5000);
+        return;
+      }
+      if (message?.type === "error") {
+        finish(reject, new Error(message.error || `${webchat.label} 网页调用失败。`), { disconnect: true });
+      }
+    });
+
+    port.onDisconnect.addListener(() => {
+      if (settled) return;
+      const runtimeMessage = chrome.runtime.lastError?.message || "";
+      const partialText = formatWebChatFinalText(latestText, latestThinking, settings);
+      const errorMessage = latestText
+        ? `${webchat.label} 网页连接已断开，已保留已生成内容。`
+        : `${webchat.label} 网页连接已断开。请确认网页已登录、没有被验证码/权限页拦截，并刷新 WebChat 页面后重试。${runtimeMessage ? `（${runtimeMessage}）` : ""}`;
+      finish(reject, Object.assign(new Error(errorMessage), {
+        partialText
+      }));
+    });
+
+    try {
+      port.postMessage({
+        type: "START",
+        bridgeVersion: WEBCHAT_BRIDGE_VERSION,
+        prompt,
+        expectedChatUrl: webchatSession?.chatUrl || "",
+        reuseExistingChat: Boolean(webchatSession?.chatUrl),
+        pdfAlreadyAttached: webchatSession?.pdfAttached === true,
+        pdfAttachmentFilename: webchatSession?.pdfFilename || "",
+        pdfAttachmentSize: webchatSession?.pdfSize || 0,
+        pdfBase64: webchatPdf?.base64 || "",
+        pdfFilename: webchatPdf?.filename || "",
+        pdfSize: webchatPdf?.size || 0,
+        timeoutMs: 120 * 60 * 1000
+      });
+    } catch (error) {
+      finish(reject, error);
+    }
+  });
+}
+
+function formatWebChatFinalText(answer, thinking, settings) {
+  const split = splitWebChatThinkingFromAnswer(answer, thinking);
+  const cleanAnswer = normalizeTextBlock(split.answer);
+  const cleanThinking = normalizeTextBlock(split.thinking);
+  if (/:::arxivmate-thinking\b/.test(cleanAnswer)) return cleanAnswer;
+  if (!cleanThinking || normalizeThinkingMode(settings?.thinkingMode) === "disabled") {
+    return cleanAnswer;
+  }
+  return [
+    `:::arxivmate-thinking ${webChatThinkingSummary(settings)}`,
+    cleanThinking,
+    ":::",
+    "",
+    cleanAnswer
+  ].join("\n");
+}
+
+function splitWebChatThinkingFromAnswer(answer, thinking = "") {
+  const cleanAnswer = normalizeTextBlock(answer);
+  const cleanThinking = normalizeTextBlock(thinking);
+  if (!cleanAnswer) return { answer: "", thinking: cleanThinking };
+  if (/:::arxivmate-thinking\b/.test(cleanAnswer)) {
+    return {
+      answer: cleanAnswer,
+      thinking: ""
+    };
+  }
+
+  const fenced = cleanAnswer.match(/^\s*```(?:thinking|reasoning|thought|cot)?\s*\n([\s\S]{80,}?)\n```\s*\n+([\s\S]{40,})$/i);
+  if (fenced && looksLikeWebChatThinkingText(fenced[1])) {
+    return {
+      answer: normalizeTextBlock(fenced[2]),
+      thinking: mergeThinkingBlocks(cleanThinking, fenced[1])
+    };
+  }
+
+  const headingSplit = cleanAnswer.match(/^\s*(?:#{1,6}\s*)?(?:思考过程|推理过程|Thinking|Reasoning|Thought process)\s*:?\s*\n+([\s\S]{80,}?)\n+(?:#{1,6}\s*)?(?:最终回答|回答|Answer|Final answer)\s*:?\s*\n+([\s\S]{40,})$/i);
+  if (headingSplit) {
+    return {
+      answer: normalizeTextBlock(headingSplit[2]),
+      thinking: mergeThinkingBlocks(cleanThinking, headingSplit[1])
+    };
+  }
+
+  const statusSplit = cleanAnswer.match(/^\s*((?:Thought for|Reasoned for|Thinking for|已思考|思考了|深度思考)[^\n]{0,120})\n+([\s\S]{80,}?)\n{2,}([\s\S]{40,})$/i);
+  if (statusSplit && looksLikeWebChatThinkingText(statusSplit[2])) {
+    return {
+      answer: normalizeTextBlock(statusSplit[3]),
+      thinking: mergeThinkingBlocks(cleanThinking, `${statusSplit[1]}\n\n${statusSplit[2]}`)
+    };
+  }
+
+  return {
+    answer: cleanAnswer,
+    thinking: cleanThinking
+  };
+}
+
+function mergeThinkingBlocks(primary, fallback) {
+  const first = normalizeTextBlock(primary);
+  const second = normalizeTextBlock(fallback);
+  if (!first) return second;
+  if (!second || first.includes(second) || second.includes(first)) return first.length >= second.length ? first : second;
+  return `${first}\n\n${second}`;
+}
+
+function looksLikeWebChatThinkingText(value) {
+  const text = normalizeTextBlock(value);
+  if (text.length < 80) return false;
+  const first = text.slice(0, 800);
+  if (/^(Thought for|Reasoned for|Thinking for|已思考|思考了|深度思考)/i.test(first)) return true;
+  const hits = [
+    /我需要|我们需要|需要分析|先看|首先/i,
+    /\bneed to\b|\bwe need\b|\bI need\b|\blet me\b|\bfirst\b/i,
+    /思路|推理|假设|检查|定位|分析/i
+  ].filter((pattern) => pattern.test(first)).length;
+  return hits >= 2;
+}
+
+function webChatThinkingSummary(settings) {
+  const language = normalizeString(settings?.language || settings?.uiLanguage || "");
+  return /^en/i.test(language) ? "Thinking" : "思考过程";
+}
+
+async function ensureWebChatTab(config, preferredUrl = "") {
+  const targetUrl = normalizeString(preferredUrl);
+  if (targetUrl && isSupportedWebChatUrl(targetUrl, config)) {
+    const matchingTabs = await chrome.tabs.query({ url: config.urlPattern });
+    let tab = matchingTabs.find((item) => item.id && normalizeWebChatChatUrl(item.url) === normalizeWebChatChatUrl(targetUrl)) || null;
+    if (!tab) {
+      tab = matchingTabs.find((item) => item.id) || null;
+      if (tab?.id) {
+        await chrome.tabs.update(tab.id, { url: targetUrl, active: true });
+      } else {
+        tab = await chrome.tabs.create({ url: targetUrl, active: true });
+      }
+    }
+    if (!tab.id) throw new Error(`无法打开 ${config.label} 网页。`);
+    await waitForTabComplete(tab.id);
+    await waitForWebChatUrl(tab.id, targetUrl);
+    return chrome.tabs.get(tab.id);
+  }
+
+  const tabs = await chrome.tabs.query({ url: config.urlPattern });
+  let tab = tabs.find((item) => item.id && isWebChatHomeUrl(item.url, config)) || null;
+  if (tab?.id) {
+    await chrome.tabs.update(tab.id, { url: config.homeUrl, active: true });
+  } else if (tabs[0]?.id) {
+    tab = await chrome.tabs.update(tabs[0].id, { url: config.homeUrl, active: true });
+  } else {
+    tab = await chrome.tabs.create({ url: config.homeUrl, active: true });
+  }
+  if (!tab.id) throw new Error(`无法打开 ${config.label} 网页。`);
+  await waitForTabComplete(tab.id);
+  return chrome.tabs.get(tab.id);
+}
+
+function isWebChatHomeUrl(url, config) {
+  try {
+    const parsed = new URL(normalizeString(url));
+    const home = new URL(config.homeUrl);
+    const parsedPath = parsed.pathname.replace(/\/+$/, "") || "/";
+    const homePath = home.pathname.replace(/\/+$/, "") || "/";
+    return parsed.origin === home.origin && parsedPath === homePath;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForWebChatUrl(tabId, expectedUrl, timeoutMs = 30000) {
+  const expected = normalizeWebChatChatUrl(expectedUrl);
+  if (!expected) return;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (tab?.url && normalizeWebChatChatUrl(tab.url) === expected) return;
+    await delay(250);
+  }
+}
+
+async function waitForTabComplete(tabId, timeoutMs = 60000) {
+  const initial = await chrome.tabs.get(tabId);
+  if (initial.status === "complete") return;
+  await new Promise((resolve) => {
+    const timeout = setTimeout(done, timeoutMs);
+    function done() {
+      clearTimeout(timeout);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }
+    function listener(id, info) {
+      if (id === tabId && info.status === "complete") done();
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+async function ensureWebChatBridge(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["webchat-injected.js"],
+    world: "MAIN"
+  }).catch(() => {});
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["webchat.js"]
+  }).catch(() => {});
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 10000) {
+    const next = await sendTabMessage(tabId, { type: "ARXIVMATE_WEBCHAT_PING" }).catch(() => null);
+    if (next?.ok && Number(next.bridgeVersion) === WEBCHAT_BRIDGE_VERSION) return next;
+    await delay(250);
+  }
+  throw new Error("WebChat 桥接脚本未就绪或仍是旧版本。请在 chrome://extensions 重新加载 arXivMate 后，再刷新 ChatGPT/DeepSeek 页面重试。");
+}
+
+function sendTabMessage(tabId, message) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildWebChatPrompt(messages, settings, options = {}) {
+  if (options?.webchatSession?.chatUrl && options.webchatSession.pdfAttached === true) {
+    return buildReusableWebChatPrompt(messages, settings, options.paper, options.webchatSession);
+  }
+  if (options?.webchatPdf?.base64) {
+    return buildAttachmentAwareWebChatPrompt(messages, settings, options.paper);
+  }
+  const chunks = [
+    "You are being used through arXivMate WebChat mode. Follow the original roles and answer the final user request.",
+    `Current WebChat profile: ${settings.requestProfileName || settings.model || providerLabel(settings.provider)}`
+  ];
+  for (const message of messages || []) {
+    const role = normalizeString(message?.role || "user").toUpperCase();
+    const content = typeof message?.content === "string"
+      ? message.content
+      : JSON.stringify(message?.content || "");
+    if (!normalizeTextBlock(content)) continue;
+    chunks.push(`\n\n[${role}]\n${content}`);
+  }
+  chunks.push("\n\nPlease answer directly in Markdown. Preserve LaTeX math delimiters.");
+  return chunks.join("\n");
+}
+
+function buildReusableWebChatPrompt(messages, settings, paper = {}, session = {}) {
+  const language = normalizeString(settings?.language || "");
+  const zh = language !== "en";
+  const finalUser = [...(messages || [])].reverse().find((message) => normalizeString(message?.role) === "user");
+  const finalContent = typeof finalUser?.content === "string"
+    ? finalUser.content
+    : JSON.stringify(finalUser?.content || "");
+  const cleanedQuestion = stripWebChatFullTextBlocks(finalContent);
+  return [
+    zh
+      ? "你正在 arXivMate WebChat 模式中继续同一篇论文的网页会话。"
+      : "You are continuing the same paper conversation through arXivMate WebChat mode.",
+    zh
+      ? "前面这个网页会话已经上传过该论文 PDF；除非我明确要求重新上传，请基于本会话已有 PDF 和历史回答继续。"
+      : "The PDF was already uploaded earlier in this web chat. Unless I explicitly request a re-upload, continue using the existing attached PDF and prior chat context.",
+    "",
+    "[PAPER]",
+    `Title: ${paper?.title || "Unknown"}`,
+    `Document ID: ${paper?.id || "Unknown"}`,
+    `PDF: ${paper?.pdfUrl || "Previously attached"}`,
+    session?.chatUrl ? `WebChat URL: ${session.chatUrl}` : "",
+    "",
+    "[CURRENT REQUEST]",
+    cleanedQuestion || (zh ? "请基于这篇论文继续回答我的问题。" : "Please continue answering based on this paper."),
+    "",
+    zh
+      ? "请直接用 Markdown 回答，并保留 LaTeX 数学公式分隔符。"
+      : "Answer directly in Markdown and preserve LaTeX math delimiters."
+  ].filter(Boolean).join("\n");
+}
+
+function buildAttachmentAwareWebChatPrompt(messages, settings, paper = {}) {
+  const chunks = [
+    "You are being used through arXivMate WebChat mode.",
+    "A PDF file is attached in this chat. Read the attached PDF directly as the primary source.",
+    "Use the metadata below only to identify the document and guide the task; do not treat it as a replacement for the PDF.",
+    `Current WebChat profile: ${settings.requestProfileName || settings.model || providerLabel(settings.provider)}`,
+    "",
+    "[PAPER METADATA]",
+    `Title: ${paper?.title || "Unknown"}`,
+    `${paper?.sourceType === "arxiv" ? "arXiv ID" : "Document ID"}: ${paper?.id || "Unknown"}`,
+    `Authors: ${paper?.authors || "Unknown"}`,
+    `Submitted: ${paper?.submittedAt || "Unknown"}`,
+    `Updated: ${paper?.paperUpdatedAt || "Unknown"}`,
+    `Subjects: ${paper?.subjects || "Unknown"}`,
+    `PDF: ${paper?.pdfUrl || "Attached PDF"}`
+  ];
+  if (normalizeTextBlock(paper?.abstract)) {
+    chunks.push(`Abstract: ${truncateTextBlock(paper.abstract, 1800)}`);
+  }
+
+  const usefulMessages = (messages || []).filter((message) => {
+    const content = typeof message?.content === "string"
+      ? message.content
+      : JSON.stringify(message?.content || "");
+    if (!normalizeTextBlock(content)) return false;
+    if (/Full text excerpt:/i.test(content)) return false;
+    if (/正文已按模型输入预算截断|Full text excerpt/i.test(content)) return false;
+    return true;
+  });
+
+  for (const message of usefulMessages) {
+    const role = normalizeString(message?.role || "user").toUpperCase();
+    let content = typeof message?.content === "string"
+      ? message.content
+      : JSON.stringify(message?.content || "");
+    content = stripWebChatFullTextBlocks(content);
+    if (!normalizeTextBlock(content)) continue;
+    chunks.push(`\n[${role}]\n${truncateTextBlock(content, role === "SYSTEM" ? 1200 : 3500)}`);
+  }
+
+  chunks.push(
+    "\nPlease answer directly in Markdown.",
+    "Preserve LaTeX math delimiters.",
+    "When you cite details, rely on the attached PDF and mention if a detail cannot be found in the attachment."
+  );
+  return chunks.join("\n");
+}
+
+function stripWebChatFullTextBlocks(content) {
+  return String(content || "")
+    .replace(/Full text excerpt:\n[\s\S]*?(?=\n\n[A-Z][A-Za-z ]+:|$)/i, "")
+    .replace(/正文节选：[\s\S]*?(?=\n\n|$)/g, "")
+    .trim();
 }
 
 async function fetchChatCompletionsPayload(settings, body, retryCount = 0) {
@@ -1552,8 +2254,9 @@ async function clearConversation(id) {
   return true;
 }
 
-async function appendConversationTurn({ paper, mode, question, answer, source, settings, inputBudget, createdAt, stopped = false }) {
+async function appendConversationTurn({ paper, mode, question, answer, source, settings, inputBudget, webchatSession = null, createdAt, stopped = false }) {
   const id = paper.id;
+  const storedPaper = stripTransientPaperFields(paper);
   const { conversations = {} } = await chrome.storage.local.get("conversations");
   const previous = conversations[id] || {};
   const messages = Array.isArray(previous.messages) ? previous.messages : [];
@@ -1587,13 +2290,30 @@ async function appendConversationTurn({ paper, mode, question, answer, source, s
       contextWindow: inputBudget?.limitTokens,
       contextCapped: inputBudget?.capped,
       stopped: Boolean(stopped),
+      webchatSession: webchatSession || undefined,
       createdAt: now
     }
   ].slice(-MAX_MESSAGES_PER_CONVERSATION);
 
+  const previousWebChatSessions = previous.webchatSessions && typeof previous.webchatSessions === "object"
+    ? previous.webchatSessions
+    : {};
+  const normalizedSession = normalizeWebChatSession(webchatSession);
+  const sessionKey = normalizedSession ? buildWebChatSessionKey(normalizedSession.provider, normalizedSession.profileId) : "";
+  const webchatSessions = normalizedSession?.provider
+    ? {
+      ...previousWebChatSessions,
+      [sessionKey]: {
+        ...previousWebChatSessions[sessionKey],
+        ...normalizedSession,
+        updatedAt: now
+      }
+    }
+    : previousWebChatSessions;
+
   conversations[id] = {
     ...previous,
-    ...paper,
+    ...storedPaper,
     id,
     title,
     kind: paper.sourceType === "pdf" ? "pdf" : "paper",
@@ -1611,6 +2331,7 @@ async function appendConversationTurn({ paper, mode, question, answer, source, s
     contextTokens: inputBudget?.estimatedAfterTokens,
     contextWindow: inputBudget?.limitTokens,
     contextCapped: inputBudget?.capped,
+    webchatSessions,
     messageCount: nextMessages.length,
     turnCount: countUserTurns(nextMessages),
     messages: nextMessages
@@ -1623,6 +2344,49 @@ async function appendConversationTurn({ paper, mode, question, answer, source, s
   );
   await chrome.storage.local.set({ conversations: pruned });
   return pruned[id];
+}
+
+function stripTransientPaperFields(paper = {}) {
+  const { webchatPdf, ...storedPaper } = paper || {};
+  return storedPaper;
+}
+
+function getReusableWebChatSession(conversation, settings) {
+  const provider = normalizeProvider(settings?.provider);
+  const profileId = normalizeString(settings?.requestProfileId);
+  const sessions = conversation?.webchatSessions && typeof conversation.webchatSessions === "object"
+    ? conversation.webchatSessions
+    : {};
+  const session = normalizeWebChatSession(sessions[buildWebChatSessionKey(provider, profileId)]);
+  if (!session?.chatUrl || session.pdfAttached !== true) return null;
+  return session.provider === provider && session.profileId === profileId ? session : null;
+}
+
+function normalizeWebChatSession(value) {
+  if (!value || typeof value !== "object") return null;
+  const provider = normalizeProvider(value.provider || value.profileProvider || "");
+  if (!isWebChatProvider(provider)) return null;
+  const chatUrl = normalizeWebChatChatUrl(value.chatUrl || value.remoteChatUrl || "");
+  if (!chatUrl) return null;
+  const profileId = normalizeString(value.profileId || value.requestProfileId);
+  return {
+    provider,
+    profileId,
+    profileName: normalizeString(value.profileName || value.requestProfileName),
+    model: normalizeString(value.model),
+    chatUrl,
+    chatId: normalizeString(value.chatId || value.remoteChatId || extractWebChatChatId(chatUrl)),
+    label: normalizeString(value.label || providerLabel(provider)),
+    pdfAttached: value.pdfAttached === true,
+    pdfFilename: sanitizePdfFilename(value.pdfFilename || value.attachmentFilename || ""),
+    pdfSize: Number(value.pdfSize) || 0,
+    pdfAttachedAt: normalizeString(value.pdfAttachedAt || value.attachmentVerifiedAt || ""),
+    updatedAt: normalizeString(value.updatedAt)
+  };
+}
+
+function buildWebChatSessionKey(provider, profileId) {
+  return `${normalizeProvider(provider)}:${normalizeString(profileId) || "default"}`;
 }
 
 function getRecentConversationMessages(messages, settings) {
@@ -1767,7 +2531,20 @@ function normalizePaper(paper = {}) {
     pdfUrl: normalizeString(paper.pdfUrl),
     pageUrl: normalizeString(paper.pageUrl),
     fullText: truncateTextBlock(paper.fullText, DEFAULT_PROFILE_SETTINGS.maxContextChars * 5),
-    contextSource: normalizeString(paper.contextSource)
+    contextSource: normalizeString(paper.contextSource),
+    webchatPdf: normalizeWebChatPdf(paper.webchatPdf)
+  };
+}
+
+function normalizeWebChatPdf(value) {
+  if (!value || typeof value !== "object") return null;
+  const base64 = normalizeString(value.base64);
+  if (!base64) return null;
+  return {
+    base64,
+    filename: sanitizePdfFilename(value.filename || "paper.pdf"),
+    size: Number(value.size) || 0,
+    url: normalizeString(value.url)
   };
 }
 
@@ -1909,6 +2686,7 @@ function resolveRequestSettings(settings, profileId) {
 }
 
 function validateModelProfile(profile) {
+  if (isWebChatProvider(profile?.provider)) return;
   if (!profile?.baseUrl) throw new Error("请填写模型配置的 API Base URL。");
   if (!profile?.model) throw new Error("请填写模型配置的模型名称。");
 }
@@ -2103,6 +2881,8 @@ function providerLabel(provider) {
   if (provider === "minimax") return "MiniMax";
   if (provider === "ollama") return "Ollama";
   if (provider === "openai") return "OpenAI";
+  if (provider === "webchatChatGPT") return "ChatGPT Web";
+  if (provider === "webchatDeepSeek") return "DeepSeek Web";
   return "Custom";
 }
 
@@ -2127,11 +2907,14 @@ function truncateTextBlock(value, maxChars) {
 
 function normalizeProvider(value) {
   const provider = normalizeString(value).toLowerCase();
-  return Object.prototype.hasOwnProperty.call(PROVIDER_PRESETS, provider) ? provider : "custom";
+  const direct = Object.keys(PROVIDER_PRESETS).find((key) => key.toLowerCase() === provider);
+  return direct || "custom";
 }
 
 function inferProviderFromBaseUrl(baseUrl) {
   const normalized = normalizeString(baseUrl).replace(/\/+$/, "").toLowerCase();
+  if (normalized === "webchat://chatgpt") return "webchatChatGPT";
+  if (normalized === "webchat://deepseek") return "webchatDeepSeek";
   const host = extractProviderHost(normalized);
   if (host.includes("minimax") || host.includes("minimaxi")) return "minimax";
   if (host.includes("deepseek")) return "deepseek";
@@ -2152,5 +2935,54 @@ function extractProviderHost(baseUrl) {
     return new URL(normalized).hostname;
   } catch {
     return normalized.replace(/^[a-z]+:\/\//i, "").split("/")[0].trim();
+  }
+}
+
+function isWebChatProvider(provider) {
+  return Object.prototype.hasOwnProperty.call(WEBCHAT_PROVIDERS, provider);
+}
+
+function getWebChatConfig(provider) {
+  const config = WEBCHAT_PROVIDERS[provider];
+  if (!config) throw new Error("未知的 WebChat 模型配置。");
+  return config;
+}
+
+function isSupportedWebChatUrl(url, config) {
+  try {
+    const parsed = new URL(url);
+    const home = new URL(config.homeUrl);
+    if (parsed.origin !== home.origin) return false;
+    if (config.id === "chatgpt") return /^\/c\/[^/?#]+/.test(parsed.pathname);
+    if (config.id === "deepseek") return /^\/a\/chat\/s\/[^/?#]+/.test(parsed.pathname);
+    return parsed.href.startsWith(config.homeUrl);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeWebChatChatUrl(url) {
+  try {
+    const parsed = new URL(normalizeString(url));
+    const host = parsed.hostname.toLowerCase();
+    if (host === "chatgpt.com") {
+      const match = parsed.pathname.match(/^\/c\/([^/?#]+)/);
+      return match ? `${parsed.origin}/c/${match[1]}` : "";
+    }
+    if (host === "chat.deepseek.com") {
+      const match = parsed.pathname.match(/^\/a\/chat\/s\/([^/?#]+)/);
+      return match ? `${parsed.origin}/a/chat/s/${match[1]}` : "";
+    }
+  } catch {}
+  return "";
+}
+
+function extractWebChatChatId(url) {
+  try {
+    const normalized = normalizeWebChatChatUrl(url);
+    if (!normalized) return "";
+    return new URL(normalized).pathname.split("/").filter(Boolean).pop() || "";
+  } catch {
+    return "";
   }
 }
