@@ -46,6 +46,7 @@ WebChat 目前支持：
 - 支持 OpenAI-compatible API、DeepSeek、MiniMax、Ollama、自定义网关。
 - 支持 ChatGPT 网页版、DeepSeek 网页版，不需要 API Key，但需要先登录网页。
 - 尽量读取 PDF 全文；ACM / IEEE 等站点阻止原始 PDF 下载时，会回退到页面正文并生成上下文 PDF 给网页模型。
+- 可连接本地 Zotero，读取分类，手动或由模型推荐分类，并保存论文条目和 PDF 附件。
 - 本地复盘库按日期整理，支持搜索、收藏、归档、复制、导出 Markdown。
 - 支持中文、英文、跟随系统；支持浅色、深色、跟随系统。
 
@@ -104,6 +105,12 @@ WebChat 适合不想配置 API Key 的用户。
 - WebChat 依赖目标网页结构。ChatGPT 或 DeepSeek 改版后，可能需要更新适配。
 - Edge 也可以使用 WebChat，但同样需要先登录目标网页。
 - 如果网页弹出验证码、权限页或登录过期，需要你先在网页里处理。
+
+## Zotero
+
+先打开 Zotero Desktop，再在论文面板点击 `Zotero`。
+
+arXivMate 会读取本地 Zotero 分类。你可以手动选择分类，也可以点 `AI 推荐` 让当前 API 模型根据论文和分类树给出建议。保存时会写入 Zotero 条目，并尽量保存 PDF 附件。ACM、IEEE 等登录受限 PDF 可能需要允许 cookies 权限。
 
 ## 升级
 
@@ -213,6 +220,7 @@ WebChat supports ChatGPT Web and DeepSeek Web.
 - OpenAI-compatible APIs, DeepSeek, MiniMax, Ollama, custom gateways.
 - ChatGPT Web and DeepSeek Web without API keys.
 - Full-text PDF extraction when possible, with page-text and generated context-PDF fallback for ACM / IEEE style restrictions.
+- Local Zotero integration: load collections, choose or suggest a collection, and save the paper item plus PDF attachment.
 - Local review library with date grouping, search, favorites, archive, copy, and Markdown export.
 
 ## Install
@@ -246,6 +254,12 @@ For ChatGPT Web or DeepSeek Web:
 3. Select it from the paper chat model dropdown.
 
 On the first turn, arXivMate tries to upload the paper PDF. If the publisher blocks direct PDF download, arXivMate uses readable page text and uploads a generated context PDF instead.
+
+## Zotero
+
+Open Zotero Desktop, then click `Zotero` in the paper panel.
+
+arXivMate loads your local Zotero collections. You can choose a collection manually or ask an API model to suggest one. Saving creates a Zotero item and tries to attach the paper PDF. Login-gated publisher PDFs may require cookies permission.
 
 ## Update
 

@@ -1,3 +1,5 @@
+importScripts("zotero-client.js");
+
 const DEFAULT_SETTINGS = {
   language: "system",
   appearance: "system"
@@ -32,7 +34,11 @@ const MODEL_PROFILES_LOCAL_KEY = "modelProfiles";
 const BACKUP_FORMAT = "arXivMate.localData";
 const BACKUP_VERSION = 1;
 const WEBCHAT_PDF_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+const ZOTERO_PDF_ATTACHMENT_MAX_BYTES = 80 * 1024 * 1024;
 const WEBCHAT_BRIDGE_VERSION = 15;
+const ZOTERO_CONNECTOR_SAVE_ITEMS_ENDPOINT = "connector/saveItems";
+const ZOTERO_CONNECTOR_UPDATE_SESSION_ENDPOINT = "connector/updateSession";
+const ZOTERO_CONNECTOR_SAVE_ATTACHMENT_ENDPOINT = "connector/saveAttachment";
 
 const PROVIDER_PRESETS = {
   openai: {
@@ -189,6 +195,22 @@ async function handleMessage(message, sender = {}) {
       });
     case "saveNote":
       return saveNote(message.paper, message.summary, message.mode, message.conversation);
+    case "zoteroGetTargets":
+      return getZoteroTargets();
+    case "zoteroSuggestTargets":
+      return suggestZoteroTargets(message.paper, message.targets, message.profileId);
+    case "zoteroEnsureCookiePermission":
+      return ensureZoteroCookiePermission(message.origins);
+    case "zoteroSavePaper":
+      return savePaperToZotero({
+        paper: message.paper,
+        targetId: message.targetId,
+        summary: message.summary,
+        conversation: message.conversation,
+        noteText: message.noteText,
+        tags: message.tags,
+        attachPdf: message.attachPdf !== false
+      });
     case "getNote":
       return getNote(message.id);
     case "getConversation":
@@ -731,6 +753,348 @@ async function listModelsForProfile(profile) {
     baseUrl: normalized.baseUrl,
     models
   };
+}
+
+async function getZoteroTargets() {
+  await callZoteroConnector("ping", {});
+  const payload = await callZoteroConnector("getSelectedCollection", { switchToReadableLibrary: true });
+  return ArxivMateZotero.normalizeTargetsPayload(payload);
+}
+
+async function suggestZoteroTargets(paper, targets, profileId = "") {
+  const normalizedTargets = Array.isArray(targets) ? targets : [];
+  if (!normalizedTargets.length) throw new Error("没有读取到 Zotero 分类，无法推荐。");
+  const baseSettings = await getSettings();
+  const settings = resolveRequestSettings(baseSettings, profileId);
+  if (isWebChatProvider(settings.provider)) {
+    throw new Error("AI 推荐分类需要使用 API 模型；WebChat 模型不适合在后台静默请求。");
+  }
+  const prompt = ArxivMateZotero.buildSuggestionPrompt(normalizePaper(paper), normalizedTargets);
+  const text = await callChatCompletions({
+    ...settings,
+    temperature: 0.1,
+    maxOutputTokens: Math.min(settings.maxOutputTokens || 8192, 1200)
+  }, [
+    {
+      role: "system",
+      content: "You recommend Zotero collections. Return strict JSON only."
+    },
+    {
+      role: "user",
+      content: prompt
+    }
+  ]);
+  return {
+    suggestions: parseZoteroSuggestions(text, normalizedTargets),
+    raw: text
+  };
+}
+
+function parseZoteroSuggestions(text, targets) {
+  const targetMap = new Map(targets.map((target) => [target.id, target]));
+  const raw = normalizeTextBlock(text);
+  let payload = null;
+  const jsonText = raw.match(/```json\s*([\s\S]*?)```/i)?.[1] || raw.match(/\{[\s\S]*\}/)?.[0] || raw;
+  try {
+    payload = JSON.parse(jsonText);
+  } catch {
+    payload = null;
+  }
+  const rows = Array.isArray(payload?.suggestions) ? payload.suggestions : [];
+  return rows
+    .map((row) => {
+      const targetId = normalizeString(row.targetId || row.id);
+      const target = targetMap.get(targetId);
+      if (!target || targetId.startsWith("L")) return null;
+      return {
+        targetId,
+        name: target.name,
+        path: ArxivMateZotero.formatZoteroTargetPath(targets, targetId),
+        reason: normalizeString(row.reason).slice(0, 240),
+        confidence: Math.max(0, Math.min(1, Number(row.confidence) || 0))
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+async function ensureZoteroCookiePermission(origins = []) {
+  if (!chrome.permissions?.request) {
+    return { granted: false, supported: false };
+  }
+  const cleanOrigins = [...new Set((Array.isArray(origins) ? origins : [])
+    .map((origin) => normalizeString(origin))
+    .filter(Boolean))];
+  const request = { permissions: ["cookies"] };
+  try {
+    const alreadyGranted = await chrome.permissions.contains(request);
+    if (alreadyGranted) return { granted: true, alreadyGranted: true };
+    const granted = await chrome.permissions.request(request);
+    return { granted, origins: cleanOrigins };
+  } catch (error) {
+    return { granted: false, error: error.message || String(error) };
+  }
+}
+
+async function savePaperToZotero({ paper, targetId = "", summary = "", conversation = null, noteText = "", tags = [], attachPdf = true } = {}) {
+  const normalizedPaper = normalizePaper(paper);
+  if (!normalizedPaper.id && !normalizedPaper.title) {
+    throw new Error("没有识别到论文标题或文档 ID，无法保存到 Zotero。");
+  }
+
+  const selected = await getZoteroTargets();
+  const target = selected.targets.find((row) => row.id === targetId) ||
+    selected.targets.find((row) => row.id === selected.selectedTargetId) ||
+    selected.targets[0];
+  if (!target) throw new Error("没有可用的 Zotero 目标分类。");
+  if (target.disabled || target.filesEditable === false) {
+    throw new Error("所选 Zotero 分类不可写，请选择其他分类。");
+  }
+
+  const ping = await callZoteroConnector("ping", {});
+  const supportsAttachmentUpload = ping?.prefs?.supportsAttachmentUpload !== false;
+  const sessionID = `arxivmate-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const itemWithAttachment = ArxivMateZotero.buildZoteroItem(normalizedPaper, { includeAttachment: attachPdf });
+  const pdfAttachment = itemWithAttachment.attachments?.[0] || null;
+  const itemForSave = supportsAttachmentUpload
+    ? { ...itemWithAttachment, attachments: [] }
+    : itemWithAttachment;
+  const cookies = await getDetailedCookiesForZotero([normalizedPaper.pageUrl, normalizedPaper.pdfUrl]);
+  const savePayload = {
+    sessionID,
+    uri: normalizedPaper.pageUrl || normalizedPaper.pdfUrl,
+    items: [itemForSave],
+    ...(cookies ? { detailedCookies: cookies } : {})
+  };
+
+  const savedItems = await callZoteroConnector(endpointMethod(ZOTERO_CONNECTOR_SAVE_ITEMS_ENDPOINT), savePayload);
+  const note = ArxivMateZotero.buildZoteroNoteHtml({
+    paper: normalizedPaper,
+    summary,
+    conversation,
+    noteText
+  });
+  await callZoteroConnector(endpointMethod(ZOTERO_CONNECTOR_UPDATE_SESSION_ENDPOINT), {
+    sessionID,
+    target: target.id,
+    tags: normalizeZoteroTags(tags),
+    note
+  });
+
+  let pdf = { requested: Boolean(attachPdf && pdfAttachment), saved: false };
+  if (attachPdf && pdfAttachment) {
+    if (supportsAttachmentUpload) {
+      pdf = await saveZoteroPdfAttachment({
+        attachment: pdfAttachment,
+        sessionID,
+        paper: normalizedPaper
+      });
+    } else {
+      pdf = {
+        requested: true,
+        saved: true,
+        delegated: true,
+        message: "Zotero 已接管附件下载。"
+      };
+    }
+  }
+
+  return {
+    itemSaved: true,
+    targetUpdated: true,
+    sessionID,
+    target: {
+      id: target.id,
+      name: target.name,
+      path: ArxivMateZotero.formatZoteroTargetPath(selected.targets, target.id) || target.name
+    },
+    items: Array.isArray(savedItems) ? savedItems : [],
+    pdf
+  };
+}
+
+async function saveZoteroPdfAttachment({ attachment, sessionID, paper }) {
+  try {
+    const buffer = await getZoteroPdfArrayBuffer(paper, attachment.url);
+    const metadata = JSON.stringify({
+      id: attachment.id,
+      url: attachment.url,
+      contentType: attachment.mimeType,
+      parentItemID: attachment.parentItem,
+      title: attachment.title
+    });
+    await callZoteroConnector(endpointMethod(ZOTERO_CONNECTOR_SAVE_ATTACHMENT_ENDPOINT), buffer, {
+      contentType: attachment.mimeType,
+      queryString: `sessionID=${encodeURIComponent(sessionID)}`,
+      headers: {
+        "X-Metadata": metadata
+      },
+      raw: true,
+      timeout: 60000
+    });
+    return {
+      requested: true,
+      saved: true,
+      size: buffer.byteLength,
+      url: attachment.url
+    };
+  } catch (error) {
+    return {
+      requested: true,
+      saved: false,
+      error: error.message || String(error),
+      url: attachment.url
+    };
+  }
+}
+
+function normalizeZoteroTags(tags) {
+  const rawTags = Array.isArray(tags)
+    ? tags
+    : String(tags || "").split(/[,，;；\n]/);
+  return [...new Set(rawTags
+    .map((tag) => normalizeString(tag))
+    .filter(Boolean))]
+    .slice(0, 20);
+}
+
+async function getZoteroPdfArrayBuffer(paper, pdfUrl) {
+  const webchatPdf = paper?.webchatPdf;
+  if (webchatPdf?.base64 && webchatPdf.generated !== true && /pdf/i.test(webchatPdf.contentType || "application/pdf")) {
+    return base64ToArrayBuffer(webchatPdf.base64, ZOTERO_PDF_ATTACHMENT_MAX_BYTES);
+  }
+  const target = normalizeString(pdfUrl || paper?.pdfUrl);
+  if (!isHttpUrl(target)) throw new Error("当前论文没有可下载的 HTTP(S) PDF 地址。");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+  try {
+    const response = await fetch(target, {
+      method: "GET",
+      redirect: "follow",
+      cache: "no-store",
+      credentials: "include",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/pdf,*/*;q=0.8"
+      }
+    });
+    if (!response.ok) throw new Error(`PDF 下载失败：HTTP ${response.status}`);
+    const contentType = response.headers.get("content-type") || "";
+    const disposition = response.headers.get("content-disposition") || "";
+    const finalUrl = response.url || target;
+    const length = Number(response.headers.get("content-length") || 0);
+    if (length > ZOTERO_PDF_ATTACHMENT_MAX_BYTES) {
+      throw new Error(`PDF 文件过大（${formatBytes(length)}），超过 ${formatBytes(ZOTERO_PDF_ATTACHMENT_MAX_BYTES)}。`);
+    }
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > ZOTERO_PDF_ATTACHMENT_MAX_BYTES) {
+      throw new Error(`PDF 文件过大（${formatBytes(buffer.byteLength)}），超过 ${formatBytes(ZOTERO_PDF_ATTACHMENT_MAX_BYTES)}。`);
+    }
+    const prefix = new TextDecoder("latin1").decode(buffer.slice(0, 16));
+    if (!isPdfResponse(contentType, disposition, finalUrl, prefix.startsWith("%PDF"))) {
+      throw new Error("当前链接返回的不是原始 PDF 字节，无法作为 Zotero 附件保存。");
+    }
+    return buffer;
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("PDF 下载超时，无法保存 Zotero 附件。");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function base64ToArrayBuffer(base64, maxBytes = ZOTERO_PDF_ATTACHMENT_MAX_BYTES) {
+  const cleanBase64 = normalizeString(base64).replace(/^data:application\/pdf;base64,/i, "");
+  const binary = atob(cleanBase64);
+  if (binary.length > maxBytes) {
+    throw new Error(`PDF 文件过大（${formatBytes(binary.length)}），超过 ${formatBytes(maxBytes)}。`);
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function getDetailedCookiesForZotero(urls = []) {
+  if (!chrome.cookies?.getAll) return "";
+  try {
+    const permission = await chrome.permissions?.contains?.({ permissions: ["cookies"] });
+    if (!permission) return "";
+  } catch {
+    return "";
+  }
+  const rows = [];
+  const seen = new Set();
+  for (const url of urls.map((item) => normalizeString(item)).filter(isHttpUrl)) {
+    let cookies = [];
+    try {
+      cookies = await chrome.cookies.getAll({ url, partitionKey: {} });
+    } catch {
+      try {
+        cookies = await chrome.cookies.getAll({ url });
+      } catch {
+        cookies = [];
+      }
+    }
+    for (const cookie of cookies) {
+      const key = `${cookie.name}|${cookie.domain}|${cookie.path}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(`${cookie.name}=${cookie.value};Domain=${cookie.domain}${cookie.path ? `;Path=${cookie.path}` : ""}${cookie.hostOnly ? ";hostOnly" : ""}${cookie.secure ? ";secure" : ""}`);
+    }
+  }
+  return rows.join("\n");
+}
+
+async function callZoteroConnector(method, data = null, options = {}) {
+  const query = options.queryString ? `?${options.queryString}` : "";
+  const url = `${ArxivMateZotero.ZOTERO_CONNECTOR_BASE_URL}connector/${method}${query}`;
+  const headers = {
+    "X-Zotero-Version": ArxivMateZotero.ZOTERO_EXTENSION_VERSION,
+    "X-Zotero-Connector-API-Version": String(ArxivMateZotero.ZOTERO_CONNECTOR_API_VERSION),
+    ...(options.headers || {})
+  };
+  let body = null;
+  if (data !== null && data !== undefined) {
+    if (options.raw) {
+      body = data;
+      headers["Content-Type"] = options.contentType || "application/octet-stream";
+    } else {
+      body = JSON.stringify(data);
+      headers["Content-Type"] = "application/json";
+    }
+  }
+  const controller = new AbortController();
+  const timeoutMs = options.timeout || 15000;
+  const timeout = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const response = await fetch(url, {
+      method: body === null ? "GET" : "POST",
+      headers,
+      body,
+      signal: controller.signal
+    });
+    const text = await response.text();
+    let payload = text;
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {}
+    if (!response.ok) {
+      const detail = payload?.message || payload?.error || text || `${response.status} ${response.statusText}`;
+      throw new Error(`Zotero Connector 请求失败（${method}）：${detail}`);
+    }
+    return payload;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`Zotero Connector 请求超时（${method}）。请确认 Zotero Desktop 已打开。`);
+    }
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function endpointMethod(endpoint) {
+  return normalizeString(endpoint).replace(/^connector\//, "");
 }
 
 async function summarizePaper({

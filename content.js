@@ -53,6 +53,22 @@
   let panelLayout = getDefaultPanelLayout();
   let panelLayoutSaveTimer = 0;
   let embeddedLayoutMode = "dock";
+  let zoteroHoverCollapseTimer = 0;
+  let zoteroState = {
+    open: false,
+    loading: false,
+    saving: false,
+    suggesting: false,
+    targets: [],
+    selectedTargetId: "",
+    filter: "",
+    expandedTargetIds: [],
+    hoverExpandedTargetIds: [],
+    note: "",
+    tags: "",
+    suggestions: [],
+    status: ""
+  };
 
   const host = document.createElement("div");
   host.id = "arxiv-llm-companion-root";
@@ -107,6 +123,7 @@
           </label>
           <button class="alc-copy" type="button" title="复制 Markdown" data-i18n="copy" data-i18n-title="copyMarkdown">复制</button>
           <button class="alc-save" type="button" title="保存最后一条回答" data-i18n="save" data-i18n-title="saveLastAnswer">保存</button>
+          <button class="alc-zotero" type="button" title="保存到 Zotero" data-i18n="zotero" data-i18n-title="zoteroTitle">Zotero</button>
           <button class="alc-review" type="button" title="打开复盘库" data-i18n="history" data-i18n-title="openReview">历史</button>
           <button class="alc-clear-chat" type="button" title="清空本篇对话" data-i18n="clear" data-i18n-title="clearChat">清空</button>
           <button class="alc-options" type="button" title="设置" data-i18n="settings" data-i18n-title="settings">设置</button>
@@ -117,6 +134,37 @@
         <div class="alc-update-banner" hidden></div>
         <div class="alc-chat" role="log" aria-live="polite"></div>
       </div>
+
+      <aside class="alc-zotero-drawer" hidden>
+        <header class="alc-zotero-head">
+          <div>
+            <strong data-i18n="zoteroTitle">保存到 Zotero</strong>
+            <span class="alc-zotero-subtitle alc-zotero-status">选择分类，也可以让模型推荐。</span>
+          </div>
+          <button class="alc-zotero-close" type="button" title="关闭" data-i18n-title="collapse">×</button>
+        </header>
+        <div class="alc-zotero-current">
+          <span data-i18n="zoteroCurrentTarget">保存到</span>
+          <strong class="alc-zotero-current-path" data-i18n="zoteroNoTargets">没有读取到可用分类。请确认 Zotero Desktop 已打开。</strong>
+          <button class="alc-zotero-primary alc-zotero-save" type="button" data-i18n="zoteroSave">保存到 Zotero</button>
+        </div>
+        <div class="alc-zotero-actions">
+          <button class="alc-zotero-load" type="button" data-i18n="zoteroLoadTargets">读取分类</button>
+          <button class="alc-zotero-suggest" type="button" data-i18n="zoteroSuggest">AI 推荐</button>
+        </div>
+        <div class="alc-zotero-expanded">
+          <label class="alc-zotero-search">
+            <input class="alc-zotero-filter" type="search" placeholder="搜索 Zotero 分类..." data-i18n-placeholder="zoteroSearchPlaceholder">
+          </label>
+          <div class="alc-zotero-library">
+            <div class="alc-zotero-suggestions"></div>
+            <div class="alc-zotero-library-title" data-i18n="zoteroAllCollections">全部分类</div>
+            <div class="alc-zotero-targets" role="listbox"></div>
+          </div>
+          <textarea class="alc-zotero-note" rows="2" placeholder="Add a note" data-i18n-placeholder="zoteroNotePlaceholder"></textarea>
+          <input class="alc-zotero-tags" type="text" placeholder="Tags, separated by commas" data-i18n-placeholder="zoteroTagsPlaceholder">
+        </div>
+      </aside>
 
       <footer class="alc-composer">
         <textarea rows="1" placeholder="问这篇论文：方法假设、实验设计、局限、和你的方向有什么关系..." data-i18n-placeholder="askPlaceholder"></textarea>
@@ -152,6 +200,14 @@
   const restoreLayoutButton = $(".alc-restore-layout");
   const resizeEdge = $(".alc-resize-edge");
   const resizeCorner = $(".alc-resize-corner");
+  const zoteroDrawer = $(".alc-zotero-drawer");
+  const zoteroStatus = $(".alc-zotero-status");
+  const zoteroTargets = $(".alc-zotero-targets");
+  const zoteroSuggestions = $(".alc-zotero-suggestions");
+  const zoteroFilter = $(".alc-zotero-filter");
+  const zoteroNote = $(".alc-zotero-note");
+  const zoteroTags = $(".alc-zotero-tags");
+  const zoteroCurrentPath = $(".alc-zotero-current-path");
   fullTextToggle.checked = true;
   fullTextToggle.disabled = true;
 
@@ -180,6 +236,11 @@
   onClick(".alc-review", () => safeSendRuntimeMessage({ type: "openReview" }));
   onClick(".alc-copy", copyCurrentMarkdown);
   onClick(".alc-save", saveCurrentNote);
+  onClick(".alc-zotero", openZoteroDrawer);
+  onClick(".alc-zotero-close", closeZoteroDrawer);
+  onClick(".alc-zotero-load", loadZoteroTargets);
+  onClick(".alc-zotero-suggest", suggestZoteroTargets);
+  onClick(".alc-zotero-save", saveToZotero);
   onClick(".alc-clear-chat", clearCurrentConversation);
   onClick(".alc-history-prev", () => jumpConversationMessage(-1));
   onClick(".alc-history-next", () => jumpConversationMessage(1));
@@ -191,6 +252,49 @@
   });
   modelSelect.addEventListener("focus", () => {
     forceRefreshSettingsFromLocal().catch(() => {});
+  });
+  zoteroFilter?.addEventListener("input", () => {
+    zoteroState.filter = zoteroFilter.value;
+    renderZoteroTargets();
+  });
+  zoteroNote?.addEventListener("input", () => {
+    zoteroState.note = zoteroNote.value;
+  });
+  zoteroTags?.addEventListener("input", () => {
+    zoteroState.tags = zoteroTags.value;
+  });
+  zoteroTargets?.addEventListener("click", (event) => {
+    const toggle = event.target?.closest?.(".alc-zotero-tree-toggle");
+    if (toggle) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleZoteroTreeNode(toggle.dataset.targetId || "");
+      return;
+    }
+    const button = event.target?.closest?.(".alc-zotero-target");
+    if (!button) return;
+    if (button.getAttribute("aria-disabled") === "true") return;
+    zoteroState.selectedTargetId = button.dataset.targetId || "";
+    renderZoteroDrawer();
+  });
+  zoteroTargets?.addEventListener("pointerover", (event) => {
+    const row = event.target?.closest?.(".alc-zotero-target");
+    if (!row) return;
+    expandZoteroTargetOnHover(row.dataset.targetId || "");
+  });
+  zoteroTargets?.addEventListener("pointerout", (event) => {
+    const row = event.target?.closest?.(".alc-zotero-target");
+    if (!row) return;
+    collapseZoteroTargetOnLeave(row.dataset.targetId || "", event);
+  });
+  zoteroTargets?.addEventListener("pointerleave", () => {
+    clearZoteroHoverExpandedTargets();
+  });
+  zoteroSuggestions?.addEventListener("click", (event) => {
+    const button = event.target?.closest?.("[data-target-id]");
+    if (!button) return;
+    zoteroState.selectedTargetId = button.dataset.targetId || "";
+    renderZoteroDrawer();
   });
 
   shadow.querySelectorAll("[data-mode]").forEach((button) => {
@@ -793,6 +897,474 @@
       renderUpdateBanner();
     }
     await loadConversation();
+  }
+
+  async function openZoteroDrawer() {
+    zoteroState.open = true;
+    zoteroDrawer.hidden = false;
+    renderZoteroDrawer();
+    if (!zoteroState.targets.length && !zoteroState.loading) {
+      await loadZoteroTargets();
+    }
+  }
+
+  function closeZoteroDrawer() {
+    zoteroState.open = false;
+    zoteroDrawer.hidden = true;
+  }
+
+  function renderZoteroDrawer() {
+    zoteroDrawer.hidden = !zoteroState.open;
+    zoteroStatus.textContent = zoteroState.status || "";
+    zoteroStatus.classList.toggle("is-error", /^error:/i.test(zoteroState.status));
+    const loadButton = $(".alc-zotero-load");
+    const suggestButton = $(".alc-zotero-suggest");
+    const saveButton = $(".alc-zotero-save");
+    if (loadButton) loadButton.disabled = zoteroState.loading;
+    if (suggestButton) suggestButton.disabled = zoteroState.loading || zoteroState.suggesting || !zoteroState.targets.length;
+    if (saveButton) saveButton.disabled = zoteroState.loading || zoteroState.saving || !zoteroState.selectedTargetId;
+    if (zoteroNote && zoteroNote.value !== zoteroState.note) zoteroNote.value = zoteroState.note;
+    if (zoteroTags && zoteroTags.value !== zoteroState.tags) zoteroTags.value = zoteroState.tags;
+    if (zoteroCurrentPath) {
+      zoteroCurrentPath.textContent = getZoteroTargetPath(zoteroState.selectedTargetId) || t("zoteroNoTargets");
+    }
+    renderZoteroSuggestions();
+    renderZoteroTargets();
+  }
+
+  async function loadZoteroTargets() {
+    zoteroState = {
+      ...zoteroState,
+      loading: true,
+      status: t("zoteroConnecting"),
+      suggestions: []
+    };
+    renderZoteroDrawer();
+    try {
+      const payload = await sendMessage({ type: "zoteroGetTargets" });
+      const targets = Array.isArray(payload?.targets) ? payload.targets : [];
+      zoteroState = {
+        ...zoteroState,
+        loading: false,
+        targets,
+        selectedTargetId: payload?.selectedTargetId || targets[0]?.id || "",
+        expandedTargetIds: getExpandedZoteroAncestorIds(targets, payload?.selectedTargetId || targets[0]?.id || ""),
+        hoverExpandedTargetIds: [],
+        status: targets.length ? t("zoteroTargetsLoaded", { count: targets.length }) : t("zoteroNoTargets")
+      };
+    } catch (error) {
+      zoteroState = {
+        ...zoteroState,
+        loading: false,
+        status: `error: ${error.message || String(error)}`
+      };
+    }
+    renderZoteroDrawer();
+  }
+
+  function renderZoteroTargets() {
+    if (!zoteroTargets) return;
+    const rows = buildZoteroTargetTreeRows(zoteroState.targets, {
+      expandedIds: getVisibleZoteroExpandedTargetIds(),
+      activeId: zoteroState.selectedTargetId,
+      filter: zoteroState.filter
+    });
+    if (!rows.length) {
+      zoteroTargets.innerHTML = `<div class="alc-zotero-empty">${escapeHtml(t("zoteroNoTargets"))}</div>`;
+      return;
+    }
+    zoteroTargets.innerHTML = rows.slice(0, 180).map((target) => {
+      const isLibrary = target.id.startsWith("L");
+      const selected = target.id === zoteroState.selectedTargetId;
+      const path = getZoteroTargetPath(target.id) || target.name;
+      const disabled = target.disabled || target.filesEditable === false;
+      const expanded = target.isExpanded === true;
+      const expandedAttr = target.hasChildren ? `aria-expanded="${expanded ? "true" : "false"}"` : "";
+      return `
+        <div class="alc-zotero-target${selected ? " is-selected" : ""}${isLibrary ? " is-library" : ""}${target.hasChildren ? " has-children" : ""}"
+             data-target-id="${escapeHtml(target.id)}"
+             data-has-children="${target.hasChildren ? "true" : "false"}"
+             style="--level:${Math.min(5, Number(target.level) || 0)}"
+             role="option"
+             aria-disabled="${disabled ? "true" : "false"}"
+             aria-selected="${selected ? "true" : "false"}"
+             ${expandedAttr}>
+          <button class="alc-zotero-tree-toggle"
+                  type="button"
+                  data-target-id="${escapeHtml(target.id)}"
+                  aria-label="${expanded ? "Collapse collection" : "Expand collection"}"
+                  ${target.hasChildren ? "" : "hidden"}>${expanded ? "▾" : "▸"}</button>
+          <span class="alc-zotero-target-text">
+            <span class="alc-zotero-target-name">${escapeHtml(target.name)}</span>
+          </span>
+          ${isLibrary ? "" : `<span class="alc-zotero-target-path">${escapeHtml(path)}</span>`}
+        </div>
+      `;
+    }).join("");
+  }
+
+  function expandZoteroTargetOnHover(targetId) {
+    const target = findZoteroTarget(targetId);
+    if (!target || !hasZoteroTargetChildren(target.id)) return;
+    if (zoteroState.expandedTargetIds.includes(target.id) || zoteroState.hoverExpandedTargetIds.includes(target.id)) return;
+    zoteroState.hoverExpandedTargetIds = [...zoteroState.hoverExpandedTargetIds, target.id];
+    renderZoteroTargets();
+  }
+
+  function collapseZoteroTargetOnLeave(_targetId, event) {
+    scheduleCollapseZoteroHoverBranches(event);
+  }
+
+  function scheduleCollapseZoteroHoverBranches(event) {
+    if (!zoteroState.hoverExpandedTargetIds.length) return;
+    if (zoteroHoverCollapseTimer) clearTimeout(zoteroHoverCollapseTimer);
+    const relatedRow = event?.relatedTarget?.closest?.(".alc-zotero-target");
+    const point = Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY)
+      ? { x: event.clientX, y: event.clientY }
+      : null;
+    zoteroHoverCollapseTimer = setTimeout(() => {
+      zoteroHoverCollapseTimer = 0;
+      const currentRow = getRelatedZoteroTargetRow(relatedRow) || getZoteroTargetRowAtPoint(point);
+      const nextIds = pruneZoteroHoverExpandedTargetIds(currentRow?.dataset.targetId || "");
+      if (arraysEqual(zoteroState.hoverExpandedTargetIds, nextIds)) return;
+      zoteroState.hoverExpandedTargetIds = nextIds;
+      renderZoteroTargets();
+    }, 90);
+  }
+
+  function clearZoteroHoverExpandedTargets() {
+    if (zoteroHoverCollapseTimer) {
+      clearTimeout(zoteroHoverCollapseTimer);
+      zoteroHoverCollapseTimer = 0;
+    }
+    if (!zoteroState.hoverExpandedTargetIds.length) return;
+    zoteroState.hoverExpandedTargetIds = [];
+    renderZoteroTargets();
+  }
+
+  function toggleZoteroTreeNode(targetId) {
+    const target = findZoteroTarget(targetId);
+    if (!target || !hasZoteroTargetChildren(target.id)) return;
+    const expanded = zoteroState.expandedTargetIds.includes(target.id);
+    zoteroState.expandedTargetIds = expanded
+      ? zoteroState.expandedTargetIds.filter((id) => id !== target.id)
+      : [...zoteroState.expandedTargetIds, target.id];
+    zoteroState.hoverExpandedTargetIds = zoteroState.hoverExpandedTargetIds.filter((id) => id !== target.id);
+    renderZoteroTargets();
+  }
+
+  function renderZoteroSuggestions() {
+    if (!zoteroSuggestions) return;
+    const rows = Array.isArray(zoteroState.suggestions) ? zoteroState.suggestions : [];
+    if (!rows.length) {
+      zoteroSuggestions.innerHTML = "";
+      return;
+    }
+    zoteroSuggestions.innerHTML = `
+      <div class="alc-zotero-suggestion-title">${escapeHtml(t("zoteroSuggestedTargets"))}</div>
+      ${rows.map((row) => `
+        <button class="alc-zotero-suggestion" type="button" data-target-id="${escapeHtml(row.targetId)}">
+          <strong>${escapeHtml(row.path || row.name || row.targetId)}</strong>
+          <span>${escapeHtml(row.reason || t("zoteroSuggestedReason"))}</span>
+        </button>
+      `).join("")}
+    `;
+  }
+
+  async function suggestZoteroTargets() {
+    if (!zoteroState.targets.length) await loadZoteroTargets();
+    const selectedProfile = getSelectedProfile();
+    zoteroState = {
+      ...zoteroState,
+      suggesting: true,
+      status: t("zoteroSuggesting")
+    };
+    renderZoteroDrawer();
+    try {
+      const response = await sendMessage({
+        type: "zoteroSuggestTargets",
+        paper,
+        targets: zoteroState.targets,
+        profileId: selectedProfile?.id || selectedProfileId
+      });
+      const suggestions = Array.isArray(response?.suggestions) ? response.suggestions : [];
+      zoteroState = {
+        ...zoteroState,
+        suggesting: false,
+        suggestions,
+        selectedTargetId: suggestions[0]?.targetId || zoteroState.selectedTargetId,
+        status: suggestions.length ? t("zoteroSuggestedCount", { count: suggestions.length }) : t("zoteroNoSuggestion")
+      };
+    } catch (error) {
+      zoteroState = {
+        ...zoteroState,
+        suggesting: false,
+        status: `error: ${error.message || String(error)}`
+      };
+    }
+    renderZoteroDrawer();
+  }
+
+  async function saveToZotero() {
+    if (!zoteroState.targets.length) await loadZoteroTargets();
+    if (!zoteroState.selectedTargetId) {
+      zoteroState.status = t("zoteroSelectTarget");
+      renderZoteroDrawer();
+      return;
+    }
+    zoteroState = {
+      ...zoteroState,
+      saving: true,
+      status: t("zoteroSaving")
+    };
+    renderZoteroDrawer();
+    try {
+      const payload = { ...paper };
+      await prepareZoteroPdfPayload(payload);
+      await requestZoteroCookiePermission(payload);
+      const response = await sendMessage({
+        type: "zoteroSavePaper",
+        paper: payload,
+        targetId: zoteroState.selectedTargetId,
+        summary: currentResult || findLastAssistantText(currentConversation),
+        conversation: currentConversation,
+        noteText: zoteroState.note,
+        tags: parseZoteroTags(zoteroState.tags),
+        attachPdf: true
+      });
+      const pdfText = response?.pdf?.saved
+        ? t("zoteroPdfSaved")
+        : response?.pdf?.requested
+          ? t("zoteroPdfFailed", { error: response.pdf.error || "" })
+          : "";
+      zoteroState = {
+        ...zoteroState,
+        saving: false,
+        status: [t("zoteroSaved", { target: response?.target?.path || response?.target?.name || "" }), pdfText].filter(Boolean).join(" · ")
+      };
+    } catch (error) {
+      zoteroState = {
+        ...zoteroState,
+        saving: false,
+        status: `error: ${error.message || String(error)}`
+      };
+    }
+    renderZoteroDrawer();
+  }
+
+  async function prepareZoteroPdfPayload(payload) {
+    const pdfUrl = getWebChatPdfCandidateUrl(payload);
+    if (!canFetchPdfBytesInPage(pdfUrl)) return payload;
+    const filename = buildPdfUploadFilename(payload);
+    try {
+      const result = await sendMessage({
+        type: "fetchPdfAsBase64",
+        url: pdfUrl,
+        filename
+      });
+      if (result?.base64 && result.generated !== true) {
+        payload.webchatPdf = {
+          ...result,
+          source: result.source || "background-fetch"
+        };
+        return payload;
+      }
+    } catch (error) {
+      payload.zoteroPdfPrepareError = error.message || String(error);
+    }
+    try {
+      const result = await fetchPdfAsBase64InPage(pdfUrl, filename);
+      if (result?.base64 && result.generated !== true) {
+        payload.webchatPdf = {
+          ...result,
+          source: result.source || "page-session-fetch"
+        };
+      }
+    } catch (error) {
+      payload.zoteroPdfPrepareError = [payload.zoteroPdfPrepareError, error.message || String(error)].filter(Boolean).join("；");
+    }
+    return payload;
+  }
+
+  async function requestZoteroCookiePermission(payload) {
+    const origins = getZoteroPermissionOrigins(payload);
+    if (!origins.length) return;
+    try {
+      const result = await sendMessage({
+        type: "zoteroEnsureCookiePermission",
+        origins
+      });
+      if (!result?.granted) {
+        zoteroState.status = t("zoteroCookiePermission");
+        renderZoteroDrawer();
+      }
+    } catch {
+      zoteroState.status = t("zoteroCookiePermission");
+      renderZoteroDrawer();
+    }
+  }
+
+  function getZoteroPermissionOrigins(payload) {
+    return [...new Set([payload?.pdfUrl, payload?.pageUrl, location.href]
+      .map((url) => {
+        try {
+          const parsed = new URL(clean(url));
+          if (!/^https?:$/.test(parsed.protocol)) return "";
+          return `${parsed.protocol}//${parsed.host}/*`;
+        } catch {
+          return "";
+        }
+      })
+      .filter(Boolean))];
+  }
+
+  function parseZoteroTags(value) {
+    return String(value || "")
+      .split(/[,，;；\n]/)
+      .map((tag) => clean(tag))
+      .filter(Boolean)
+      .slice(0, 20);
+  }
+
+  function getZoteroTargetPath(targetId) {
+    return window.ArxivMateZotero?.formatZoteroTargetPath?.(zoteroState.targets, targetId) ||
+      formatZoteroTargetPathFallback(zoteroState.targets, targetId) ||
+      zoteroState.targets.find((target) => target.id === targetId)?.name ||
+      "";
+  }
+
+  function buildZoteroTargetTreeRows(targets = [], options = {}) {
+    const sharedRows = window.ArxivMateZotero?.buildZoteroTargetTreeRows?.(targets, options);
+    return Array.isArray(sharedRows) ? sharedRows : buildZoteroTargetTreeRowsFallback(targets, options);
+  }
+
+  function buildZoteroTargetTreeRowsFallback(targets = [], options = {}) {
+    const rows = (Array.isArray(targets) ? targets : [])
+      .map((target, index) => {
+        const level = Number(target.level) || 0;
+        const nextLevel = Number(targets[index + 1]?.level);
+        return {
+          ...target,
+          level,
+          hasChildren: Number.isFinite(nextLevel) && nextLevel > level
+        };
+      })
+      .filter((target) => target.id && target.name);
+    const expandedIds = new Set(Array.isArray(options.expandedIds) ? options.expandedIds.map((id) => clean(id)) : []);
+    const activeId = clean(options.activeId);
+    for (const ancestorId of getZoteroTargetAncestorIdsFallback(rows, activeId)) expandedIds.add(ancestorId);
+    const filter = clean(options.filter).toLowerCase();
+    const visibleIds = new Set();
+    if (filter) {
+      for (const target of rows) {
+        const path = formatZoteroTargetPathFallback(rows, target.id) || target.name;
+        if (!path.toLowerCase().includes(filter)) continue;
+        visibleIds.add(target.id);
+        for (const ancestorId of getZoteroTargetAncestorIdsFallback(rows, target.id)) {
+          visibleIds.add(ancestorId);
+          expandedIds.add(ancestorId);
+        }
+      }
+    }
+    return rows
+      .filter((target) => {
+        if (filter) return visibleIds.has(target.id);
+        if (!getZoteroTargetAncestorIdsFallback(rows, target.id).length) return true;
+        return getZoteroTargetAncestorIdsFallback(rows, target.id).every((ancestorId) => {
+          const ancestor = rows.find((row) => row.id === ancestorId);
+          return ancestor?.id?.startsWith("L") || expandedIds.has(ancestorId);
+        });
+      })
+      .map((target) => ({
+        ...target,
+        isExpanded: target.hasChildren && (target.id.startsWith("L") || expandedIds.has(target.id))
+      }));
+  }
+
+  function getVisibleZoteroExpandedTargetIds() {
+    return [...new Set([
+      ...(Array.isArray(zoteroState.expandedTargetIds) ? zoteroState.expandedTargetIds : []),
+      ...(Array.isArray(zoteroState.hoverExpandedTargetIds) ? zoteroState.hoverExpandedTargetIds : [])
+    ])];
+  }
+
+  function getExpandedZoteroAncestorIds(targets, targetId) {
+    return window.ArxivMateZotero?.getZoteroTargetAncestorIds?.(targets, targetId)
+      ?.filter((id) => !String(id).startsWith("L")) ||
+      getZoteroTargetAncestorIdsFallback(targets, targetId).filter((id) => !String(id).startsWith("L")) ||
+      [];
+  }
+
+  function isZoteroTargetInBranch(branchId, targetId) {
+    return window.ArxivMateZotero?.isZoteroTargetInBranch?.(zoteroState.targets, branchId, targetId) ||
+      branchId === targetId ||
+      getZoteroTargetAncestorIdsFallback(zoteroState.targets, targetId).includes(branchId);
+  }
+
+  function pruneZoteroHoverExpandedTargetIds(pointerTargetId) {
+    const sharedIds = window.ArxivMateZotero?.pruneZoteroHoverExpandedTargetIds?.(
+      zoteroState.targets,
+      zoteroState.hoverExpandedTargetIds,
+      pointerTargetId
+    );
+    if (Array.isArray(sharedIds)) return sharedIds;
+    return zoteroState.hoverExpandedTargetIds
+      .filter((id) => isZoteroTargetInBranch(id, pointerTargetId));
+  }
+
+  function getRelatedZoteroTargetRow(row) {
+    if (!row || !zoteroTargets?.contains?.(row)) return null;
+    return row;
+  }
+
+  function getZoteroTargetRowAtPoint(point) {
+    if (!point) return null;
+    const element = shadow.elementFromPoint?.(point.x, point.y);
+    return element?.closest?.(".alc-zotero-target") || null;
+  }
+
+  function findZoteroTarget(targetId) {
+    return zoteroState.targets.find((target) => target.id === targetId) || null;
+  }
+
+  function hasZoteroTargetChildren(targetId) {
+    const index = zoteroState.targets.findIndex((target) => target.id === targetId);
+    if (index < 0) return false;
+    const level = Number(zoteroState.targets[index].level) || 0;
+    const nextLevel = Number(zoteroState.targets[index + 1]?.level);
+    return Number.isFinite(nextLevel) && nextLevel > level;
+  }
+
+  function getZoteroTargetAncestorIdsFallback(targets = [], targetId = "") {
+    const rows = Array.isArray(targets) ? targets : [];
+    const index = rows.findIndex((target) => target.id === targetId);
+    if (index < 0) return [];
+    const ancestors = [];
+    let level = Number(rows[index].level) || 0;
+    for (let i = index - 1; i >= 0 && level > 0; i -= 1) {
+      const parent = rows[i];
+      const parentLevel = Number(parent.level) || 0;
+      if (parentLevel < level) {
+        ancestors.unshift(parent.id);
+        level = parentLevel;
+      }
+    }
+    return ancestors;
+  }
+
+  function formatZoteroTargetPathFallback(targets = [], targetId = "") {
+    const rows = Array.isArray(targets) ? targets : [];
+    const target = rows.find((row) => row.id === targetId);
+    if (!target) return "";
+    const names = getZoteroTargetAncestorIdsFallback(rows, targetId)
+      .map((id) => rows.find((row) => row.id === id)?.name)
+      .filter(Boolean);
+    names.push(target.name);
+    return names.join(" / ");
+  }
+
+  function arraysEqual(left = [], right = []) {
+    return left.length === right.length && left.every((value, index) => value === right[index]);
   }
 
   function resolveTurnContextMode(mode) {
@@ -1666,6 +2238,7 @@
     renderPaperHeader();
     renderConversation(currentConversation);
     renderModelSelect();
+    renderZoteroDrawer();
   }
 
   function t(key, vars = {}) {

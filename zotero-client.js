@@ -1,0 +1,338 @@
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) {
+    module.exports = api;
+  }
+  root.ArxivMateZotero = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  const ZOTERO_CONNECTOR_API_VERSION = 3;
+  const ZOTERO_CONNECTOR_BASE_URL = "http://127.0.0.1:23119/";
+  const ZOTERO_EXTENSION_VERSION = "arXivMate";
+  const SOURCE_ITEM_TYPE_RULES = {
+    arxiv: { itemType: "preprint" },
+    acm: { itemType: "conferencePaper" },
+    ieee: { itemType: "conferencePaper" }
+  };
+
+  function clean(value) {
+    return String(value ?? "").replace(/\s+/g, " ").trim();
+  }
+
+  function randomId(prefix = "am") {
+    const cryptoObj = typeof crypto !== "undefined" ? crypto : null;
+    if (cryptoObj?.randomUUID) return `${prefix}-${cryptoObj.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    return `${prefix}-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
+  }
+
+  function extractDoi(paper = {}) {
+    const candidates = [
+      paper.doi,
+      clean(paper.id).replace(/^acm:/i, "").replace(/^doi:/i, ""),
+      paper.pageUrl,
+      paper.pdfUrl
+    ];
+    for (const candidate of candidates) {
+      const text = clean(candidate);
+      const match = text.match(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i);
+      if (match) return match[0].replace(/[.)\]]+$/, "");
+    }
+    return "";
+  }
+
+  function extractYearDate(raw) {
+    const text = clean(raw);
+    if (!text) return "";
+    const match = text.match(/\b(19|20)\d{2}\b/);
+    return match ? match[0] : text;
+  }
+
+  function parseCreators(authors) {
+    const text = clean(authors)
+      .replace(/^Authors?:/i, "")
+      .replace(/\s+and\s+/gi, ", ");
+    if (!text) return [];
+    return text
+      .split(/\s*,\s*|;\s*/)
+      .map((name) => clean(name))
+      .filter(Boolean)
+      .slice(0, 60)
+      .map((name) => {
+        if (name.includes(" ")) {
+          const parts = name.split(/\s+/);
+          return {
+            creatorType: "author",
+            firstName: parts.slice(0, -1).join(" "),
+            lastName: parts.at(-1)
+          };
+        }
+        return { creatorType: "author", name };
+      });
+  }
+
+  function inferItemType(paper = {}) {
+    const sourceType = clean(paper.sourceType).toLowerCase();
+    if (SOURCE_ITEM_TYPE_RULES[sourceType]) return SOURCE_ITEM_TYPE_RULES[sourceType].itemType;
+    if (extractDoi(paper)) return "journalArticle";
+    return "document";
+  }
+
+  function buildZoteroAttachment(paper = {}, itemId = randomId("item")) {
+    const pdfUrl = clean(paper.pdfUrl || paper.webchatPdf?.url);
+    if (!pdfUrl) return null;
+    let referrer = clean(paper.pageUrl);
+    try {
+      referrer = referrer ? new URL(referrer).origin : new URL(pdfUrl).origin;
+    } catch (_) {
+      referrer = "";
+    }
+    return {
+      id: randomId("att"),
+      parentItem: itemId,
+      title: "Full Text PDF",
+      url: pdfUrl,
+      mimeType: "application/pdf",
+      isPrimary: true,
+      referrer
+    };
+  }
+
+  function buildZoteroItem(paper = {}, options = {}) {
+    const includeAttachment = options.includeAttachment !== false;
+    const itemType = inferItemType(paper);
+    const id = randomId("item");
+    const doi = extractDoi(paper);
+    const arxivId = clean(paper.sourceType).toLowerCase() === "arxiv"
+      ? clean(paper.id).replace(/^arXiv:/i, "")
+      : "";
+    const item = {
+      id,
+      itemType,
+      title: clean(paper.title) || clean(paper.id) || "Untitled paper",
+      creators: parseCreators(paper.authors),
+      abstractNote: clean(paper.abstract),
+      url: clean(paper.pageUrl || paper.pdfUrl),
+      accessDate: new Date().toISOString(),
+      attachments: []
+    };
+
+    const date = extractYearDate(paper.submittedAt || paper.paperUpdatedAt || paper.date);
+    if (date) item.date = date;
+    if (doi) item.DOI = doi;
+
+    if (itemType === "preprint") {
+      item.repository = arxivId ? "arXiv" : clean(paper.sourceType || "Preprint");
+      if (arxivId) item.archiveID = arxivId;
+      item.genre = "preprint";
+    } else if (itemType === "conferencePaper") {
+      item.conferenceName = clean(paper.venue || paper.comments);
+      item.proceedingsTitle = clean(paper.publicationTitle || paper.venue);
+    } else if (itemType === "journalArticle") {
+      item.publicationTitle = clean(paper.publicationTitle || paper.venue);
+    }
+
+    const extra = [
+      arxivId ? `arXiv: ${arxivId}` : "",
+      clean(paper.subjects) ? `Subjects: ${clean(paper.subjects)}` : "",
+      clean(paper.comments) ? `Comments: ${clean(paper.comments)}` : "",
+      clean(paper.pdfUrl) ? `PDF: ${clean(paper.pdfUrl)}` : "",
+      "Saved with arXivMate"
+    ].filter(Boolean).join("\n");
+    if (extra) item.extra = extra;
+
+    if (includeAttachment) {
+      const attachment = buildZoteroAttachment(paper, id);
+      if (attachment) item.attachments.push(attachment);
+    }
+    return item;
+  }
+
+  function htmlEscape(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function buildZoteroNoteHtml({ paper = {}, summary = "", conversation = null, noteText = "" } = {}) {
+    const answer = clean(summary);
+    const userNote = clean(noteText);
+    const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
+    const title = clean(paper.title || paper.id || "arXivMate Note");
+    const lines = [
+      `<h2>${htmlEscape(title)}</h2>`,
+      clean(paper.pageUrl) ? `<p><b>URL:</b> ${htmlEscape(clean(paper.pageUrl))}</p>` : "",
+      userNote ? `<h3>User Note</h3><p>${htmlEscape(userNote).replace(/\n/g, "<br>")}</p>` : "",
+      answer ? `<h3>arXivMate</h3><p>${htmlEscape(answer).replace(/\n/g, "<br>")}</p>` : "",
+      messages.length ? `<p><b>Chat turns:</b> ${messages.length}</p>` : ""
+    ];
+    return lines.filter(Boolean).join("\n");
+  }
+
+  function normalizeTargetsPayload(payload = {}) {
+    const targets = Array.isArray(payload.targets) ? payload.targets : [];
+    let currentId = clean(payload.id);
+    if (!currentId && payload.libraryID) currentId = `L${payload.libraryID}`;
+    if (currentId && !/^[LC]/.test(currentId) && payload.id) currentId = `C${payload.id}`;
+    return {
+      libraryID: payload.libraryID,
+      libraryName: clean(payload.libraryName),
+      editable: payload.editable !== false && payload.libraryEditable !== false,
+      filesEditable: payload.filesEditable !== false,
+      selectedTargetId: currentId || targets[0]?.id || "",
+      selectedTargetName: clean(payload.name || targets.find((target) => target.id === currentId)?.name),
+      targets: targets.map((target) => ({
+        id: clean(target.id),
+        name: clean(target.name),
+        level: Number.isFinite(Number(target.level)) ? Number(target.level) : 0,
+        filesEditable: target.filesEditable !== false,
+        disabled: target.disabled === true,
+        recent: target.recent === true
+      })).filter((target) => target.id && target.name),
+      tags: payload.tags || {}
+    };
+  }
+
+  function formatZoteroTargetPath(targets = [], id = "") {
+    const index = targets.findIndex((target) => target.id === id);
+    if (index < 0) return "";
+    const row = targets[index];
+    const path = [row.name];
+    let level = Number(row.level) || 0;
+    for (let i = index - 1; i >= 0 && level > 0; i -= 1) {
+      const parent = targets[i];
+      const parentLevel = Number(parent.level) || 0;
+      if (parentLevel < level) {
+        path.unshift(parent.name);
+        level = parentLevel;
+      }
+    }
+    return path.join(" / ");
+  }
+
+  function getZoteroTargetAncestorIds(targets = [], id = "") {
+    const index = targets.findIndex((target) => target.id === id);
+    if (index < 0) return [];
+    const ancestors = [];
+    let level = Number(targets[index].level) || 0;
+    for (let i = index - 1; i >= 0 && level > 0; i -= 1) {
+      const parent = targets[i];
+      const parentLevel = Number(parent.level) || 0;
+      if (parentLevel < level) {
+        ancestors.unshift(parent.id);
+        level = parentLevel;
+      }
+    }
+    return ancestors;
+  }
+
+  function isZoteroTargetInBranch(targets = [], branchId = "", targetId = "") {
+    const cleanBranchId = clean(branchId);
+    const cleanTargetId = clean(targetId);
+    if (!cleanBranchId || !cleanTargetId) return false;
+    if (cleanBranchId === cleanTargetId) return true;
+    return getZoteroTargetAncestorIds(targets, cleanTargetId).includes(cleanBranchId);
+  }
+
+  function pruneZoteroHoverExpandedTargetIds(targets = [], hoverIds = [], pointerTargetId = "") {
+    const cleanPointerTargetId = clean(pointerTargetId);
+    if (!cleanPointerTargetId) return [];
+    return (Array.isArray(hoverIds) ? hoverIds : [])
+      .map((id) => clean(id))
+      .filter(Boolean)
+      .filter((id) => isZoteroTargetInBranch(targets, id, cleanPointerTargetId));
+  }
+
+  function buildZoteroTargetTreeRows(targets = [], options = {}) {
+    const rows = targets
+      .map((target, index) => {
+        const level = Number(target.level) || 0;
+        const nextLevel = Number(targets[index + 1]?.level);
+        return {
+          ...target,
+          level,
+          hasChildren: Number.isFinite(nextLevel) && nextLevel > level
+        };
+      })
+      .filter((target) => target.id && target.name);
+    const expandedIds = new Set(Array.isArray(options.expandedIds) ? options.expandedIds.map(clean) : []);
+    const activeId = clean(options.activeId);
+    for (const ancestorId of getZoteroTargetAncestorIds(rows, activeId)) expandedIds.add(ancestorId);
+    const filter = clean(options.filter).toLowerCase();
+    const visibleIds = new Set();
+
+    if (filter) {
+      for (const target of rows) {
+        const path = formatZoteroTargetPath(rows, target.id) || target.name;
+        if (!path.toLowerCase().includes(filter)) continue;
+        visibleIds.add(target.id);
+        for (const ancestorId of getZoteroTargetAncestorIds(rows, target.id)) {
+          visibleIds.add(ancestorId);
+          expandedIds.add(ancestorId);
+        }
+      }
+    }
+
+    return rows
+      .filter((target) => {
+        if (filter) return visibleIds.has(target.id);
+        if (target.level <= 0) return true;
+        return getZoteroTargetAncestorIds(rows, target.id)
+          .every((ancestorId) => {
+            const ancestor = rows.find((row) => row.id === ancestorId);
+            return ancestor?.level <= 0 || expandedIds.has(ancestorId);
+          });
+      })
+      .map((target) => ({
+        ...target,
+        isExpanded: target.hasChildren && (target.level <= 0 || expandedIds.has(target.id))
+      }));
+  }
+
+  function targetRowsForPrompt(targets = []) {
+    return targets
+      .filter((target) => target.id && !target.id.startsWith("L") && target.disabled !== true)
+      .map((target) => ({
+        id: target.id,
+        name: target.name,
+        path: formatZoteroTargetPath(targets, target.id)
+      }));
+  }
+
+  function buildSuggestionPrompt(paper = {}, targets = []) {
+    const rows = targetRowsForPrompt(targets).slice(0, 160);
+    return [
+      "You are helping choose a Zotero collection for a research paper.",
+      "Return only JSON with this shape: {\"suggestions\":[{\"targetId\":\"C...\",\"reason\":\"short reason\",\"confidence\":0.0}]}",
+      "Choose up to 3 targetId values from the provided collection list. Do not invent IDs.",
+      "",
+      `Title: ${clean(paper.title) || "Unknown"}`,
+      `Authors: ${clean(paper.authors) || "Unknown"}`,
+      `Abstract: ${clean(paper.abstract).slice(0, 2400) || "Unknown"}`,
+      `Subjects: ${clean(paper.subjects) || "Unknown"}`,
+      "",
+      "Collections:",
+      JSON.stringify(rows, null, 2)
+    ].join("\n");
+  }
+
+  return {
+    ZOTERO_CONNECTOR_API_VERSION,
+    ZOTERO_CONNECTOR_BASE_URL,
+    ZOTERO_EXTENSION_VERSION,
+    buildZoteroAttachment,
+    buildZoteroItem,
+    buildZoteroNoteHtml,
+    buildZoteroTargetTreeRows,
+    buildSuggestionPrompt,
+    clean,
+    extractDoi,
+    formatZoteroTargetPath,
+    getZoteroTargetAncestorIds,
+    isZoteroTargetInBranch,
+    normalizeTargetsPayload,
+    parseCreators,
+    pruneZoteroHoverExpandedTargetIds,
+    targetRowsForPrompt
+  };
+});

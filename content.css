@@ -420,6 +420,350 @@
   display: none;
 }
 
+.alc-zotero-drawer {
+  flex: 0 0 auto;
+  max-height: 52%;
+  overflow: hidden;
+  border-top: 1px solid var(--alc-line);
+  background: var(--alc-panel);
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.alc-zotero-drawer[hidden] {
+  display: none;
+}
+
+.alc-zotero-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px 6px;
+}
+
+.alc-zotero-head strong {
+  display: block;
+  color: var(--alc-text);
+  font-size: 13px;
+}
+
+.alc-zotero-subtitle {
+  display: block;
+  margin-top: 2px;
+  color: var(--alc-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.alc-zotero-close {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--alc-line);
+  border-radius: 7px;
+  background: var(--alc-control);
+  color: var(--alc-text);
+  cursor: pointer;
+}
+
+.alc-zotero-status {
+  min-height: 0;
+  padding: 0;
+  color: var(--alc-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.alc-zotero-status.is-error {
+  color: var(--alc-warn);
+}
+
+.alc-zotero-current {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin: 0 12px 9px;
+  border: 1px solid var(--alc-line);
+  border-radius: 6px;
+  background: var(--alc-control);
+  padding: 7px;
+}
+
+.alc-zotero-current > span {
+  color: var(--alc-muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.alc-zotero-note:focus,
+.alc-zotero-tags:focus {
+  outline: 2px solid var(--alc-focus);
+  border-color: var(--alc-accent);
+}
+
+.alc-zotero-current-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--alc-text);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alc-zotero-primary {
+  min-height: 28px;
+  min-width: 96px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--alc-accent);
+  color: var(--alc-button-text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.alc-zotero-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.alc-zotero-actions {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 0 12px 8px;
+}
+
+.alc-zotero-actions button {
+  flex: 0 0 auto;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  color: var(--alc-accent-strong);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 0;
+  cursor: pointer;
+}
+
+.alc-zotero-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.alc-zotero-expanded {
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+}
+
+.alc-zotero-search {
+  display: grid;
+  padding: 0 12px 6px;
+}
+
+.alc-zotero-filter {
+  width: 100%;
+  min-height: 28px;
+  border: 1px solid var(--alc-line);
+  border-radius: 3px;
+  padding: 0 8px;
+  background: var(--alc-panel);
+  color: var(--alc-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.alc-zotero-filter:focus {
+  outline: 2px solid var(--alc-focus);
+  border-color: var(--alc-accent);
+}
+
+.alc-zotero-library {
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  border-top: 1px solid var(--alc-line);
+  border-bottom: 1px solid var(--alc-line);
+}
+
+.alc-zotero-library-title {
+  padding: 8px 12px 3px;
+  color: var(--alc-muted);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.alc-zotero-suggestions {
+  display: grid;
+  gap: 0;
+  max-height: 116px;
+  overflow: auto;
+  padding: 0 12px;
+}
+
+.alc-zotero-suggestion-title {
+  margin-top: 3px;
+  margin-bottom: 2px;
+  color: var(--alc-muted);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.alc-zotero-suggestion {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  border: 0;
+  border-left: 2px solid var(--alc-accent);
+  background: transparent;
+  color: var(--alc-text);
+  padding: 6px 0 6px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.alc-zotero-suggestion + .alc-zotero-suggestion {
+  border-top: 1px solid var(--alc-line);
+}
+
+.alc-zotero-suggestion strong,
+.alc-zotero-suggestion span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.alc-zotero-suggestion strong {
+  color: var(--alc-accent-strong);
+  font-size: 11px;
+}
+
+.alc-zotero-suggestion span {
+  color: var(--alc-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.alc-zotero-targets {
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 8px 10px;
+}
+
+.alc-zotero-target {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 2px;
+  align-items: start;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--alc-text);
+  padding: 4px 8px 4px calc(8px + var(--level, 0) * 13px);
+  text-align: left;
+  cursor: pointer;
+}
+
+.alc-zotero-target:hover {
+  border-color: var(--alc-line);
+  background: var(--alc-surface);
+}
+
+.alc-zotero-target.is-selected {
+  border-color: var(--alc-accent);
+  background: var(--alc-accent-soft);
+}
+
+.alc-zotero-target.is-library {
+  font-weight: 900;
+}
+
+.alc-zotero-target[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.alc-zotero-tree-toggle {
+  width: 17px;
+  height: 17px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--alc-muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 17px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.alc-zotero-tree-toggle:hover {
+  background: var(--alc-control);
+  color: var(--alc-text);
+}
+
+.alc-zotero-target-text {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.alc-zotero-target-name,
+.alc-zotero-target-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.alc-zotero-target-name {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.alc-zotero-target-path {
+  grid-column: 2;
+  color: var(--alc-muted);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.alc-zotero-empty {
+  padding: 12px;
+  color: var(--alc-muted);
+  font-size: 12px;
+}
+
+.alc-zotero-note,
+.alc-zotero-tags {
+  width: calc(100% - 24px);
+  margin: 7px 12px 0;
+  border: 1px solid var(--alc-line);
+  border-radius: 3px;
+  background: var(--alc-panel);
+  color: var(--alc-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.alc-zotero-note {
+  min-height: 46px;
+  resize: vertical;
+  padding: 6px 8px;
+}
+
+.alc-zotero-tags {
+  height: 28px;
+  margin-bottom: 10px;
+  padding: 0 8px;
+}
+
 .am-update-title {
   display: block;
   margin-bottom: 3px;

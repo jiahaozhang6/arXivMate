@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.19 - 2026-07-02
+
+Zotero collection save release.
+
+- Add Zotero Connector integration for reading local Zotero libraries and saving papers into a selected collection.
+- Add a compact Zotero save panel with collection search, AI collection suggestions, optional Zotero notes, and tag input.
+- Add hover-based collection tree expansion: parent collections expand on hover and collapse after leaving the branch, while manual disclosure stays fixed.
+- Save PDF attachments through the local Zotero Connector flow when available, with cookie permission requested only when needed.
+- Fix embedded PDF panel loading so Zotero tree helpers load before the paper panel script.
+- Add contract tests for Zotero item mapping, tree rendering, hover collapse behavior, and Connector save flow.
+
 ## 0.1.18 - 2026-07-02
 
 Browser/site support, WebChat stability, and README restructure release.
