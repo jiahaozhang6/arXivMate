@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.20 - 2026-07-03
+
+Zotero suggestion, model settings, and README cleanup release.
+
+- Improve Zotero collection suggestions with tolerant parsing and local fallback matching when model output is empty or unusable.
+- Preserve usable Zotero suggestions even when the background response is empty by falling back in the paper panel.
+- Clean up removed model-dropdown refresh code and guard against old custom model menu regressions.
+- Restore stable PDF panel behavior and protect textarea/model-select interactions.
+- Simplify the README into a shorter project introduction.
+- Add contract tests for Zotero suggestion parsing, PDF iframe panel behavior, model select stability, and source cleanup.
+
 ## 0.1.19 - 2026-07-02
 
 Zotero collection save release.

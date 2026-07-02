@@ -15,9 +15,35 @@
         overflow: hidden;
         background: transparent;
       }
+      .panel-static-fallback {
+        width: 100%;
+        height: 100%;
+        display: grid;
+        place-content: center;
+        gap: 8px;
+        box-sizing: border-box;
+        padding: 24px;
+        background: #fff;
+        color: #66707a;
+        font: 13px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        text-align: center;
+      }
+      .panel-static-fallback strong {
+        color: #20242a;
+        font-size: 15px;
+      }
+      .panel-static-fallback small {
+        max-width: 320px;
+        color: #8a949e;
+        font-size: 12px;
+      }
     </style>
   </head>
   <body>
+    <div id="arxivmate-panel-static-fallback" class="panel-static-fallback">
+      <strong>正在打开 arXivMate</strong>
+      <span>正在读取当前论文信息...</span>
+    </div>
     <script src="i18n.js"></script>
     <script src="update-banner.js"></script>
     <script src="vendor/markdown-it/markdown-it.min.js"></script>
@@ -26,6 +52,6 @@
     <script src="math-render.js"></script>
     <script src="markdown-render.js"></script>
     <script src="zotero-client.js"></script>
-    <script src="content.js"></script>
+    <script src="panel-bootstrap.js"></script>
   </body>
 </html>

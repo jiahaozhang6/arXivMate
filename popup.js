@@ -3,7 +3,21 @@ const statusNode = document.querySelector("#status");
 const updateStatusNode = document.querySelector("#update-status");
 const downloadUpdateLink = document.querySelector("#download-update");
 const updateBannerNode = document.querySelector("#update-banner");
+const openPanelButton = document.querySelector("#open-panel");
 let currentLanguage = "system";
+let activeTabSnapshot = null;
+
+const CONTENT_SCRIPT_FILES = [
+  "i18n.js",
+  "update-banner.js",
+  "vendor/markdown-it/markdown-it.min.js",
+  "vendor/katex/katex.min.js",
+  "vendor/pdfjs/pdf.js",
+  "math-render.js",
+  "markdown-render.js",
+  "zotero-client.js",
+  "content.js"
+];
 
 initPopup();
 
@@ -13,6 +27,16 @@ document.querySelector("#options").addEventListener("click", () => {
 
 document.querySelector("#review").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("review.html") });
+});
+
+openPanelButton?.addEventListener("click", () => {
+  const pending = activeTabSnapshot?.id && isSupportedPaperTab(activeTabSnapshot.url || "")
+    ? openPanelForTab(activeTabSnapshot)
+    : openPanelForCurrentTab();
+  pending.catch((error) => {
+    statusNode.textContent = `${t("popupOpenPanelFailed")} ${error?.message || ""}`.trim();
+    console.warn("arXivMate popup open panel failed:", error);
+  });
 });
 
 async function initPopup() {
@@ -38,9 +62,69 @@ function applyLanguage() {
 
 function updateTabStatus() {
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-    if (isSupportedPaperTab(tab?.url || "")) {
+    activeTabSnapshot = tab || null;
+    const supported = isSupportedPaperTab(tab?.url || "");
+    if (openPanelButton) openPanelButton.disabled = !supported;
+    if (supported) {
       statusNode.textContent = t("popupStatusArxiv");
     }
+  });
+}
+
+async function openPanelForCurrentTab() {
+  const tab = await getCurrentTab();
+  return openPanelForTab(tab);
+}
+
+async function openPanelForTab(tab) {
+  if (!tab?.id || !isSupportedPaperTab(tab.url || "")) return;
+  statusNode.textContent = t("popupOpeningPanel");
+  try {
+    await sendTabMessage(tab.id, { type: "openArxivMatePanel" });
+    statusNode.textContent = t("popupStatusArxiv");
+    return;
+  } catch (firstError) {
+    try {
+      await injectContentScripts(tab.id);
+      await sendTabMessage(tab.id, { type: "openArxivMatePanel" });
+      statusNode.textContent = t("popupStatusArxiv");
+      return;
+    } catch (secondError) {
+      console.warn("arXivMate page injection failed:", firstError, secondError);
+      throw new Error(t("popupOpenPanelRetryHint"));
+    }
+  }
+}
+
+function getCurrentTab() {
+  return new Promise((resolve) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+      resolve(tab || null);
+    });
+  });
+}
+
+function sendTabMessage(tabId, payload) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, payload, (response) => {
+      const lastError = chrome.runtime.lastError;
+      if (lastError) {
+        reject(new Error(lastError.message));
+        return;
+      }
+      if (!response?.ok) {
+        reject(new Error(response?.error || "No valid panel response."));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+function injectContentScripts(tabId) {
+  return chrome.scripting.executeScript({
+    target: { tabId },
+    files: CONTENT_SCRIPT_FILES
   });
 }
 

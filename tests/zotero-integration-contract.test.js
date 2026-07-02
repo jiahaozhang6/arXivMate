@@ -24,8 +24,8 @@ assert.match(
 );
 assert.ok(
   panel.indexOf('src="zotero-client.js"') > -1 &&
-    panel.indexOf('src="zotero-client.js"') < panel.indexOf('src="content.js"'),
-  "embedded panel should load zotero-client.js before content.js"
+    panel.indexOf('src="zotero-client.js"') < panel.indexOf('src="panel-bootstrap.js"'),
+  "embedded panel should load zotero-client.js before the bootstrap that loads content.js"
 );
 
 assert.match(zoteroClient, /ZOTERO_CONNECTOR_API_VERSION\s*=\s*3/, "Zotero Connector API v3 should be used");
@@ -33,6 +33,7 @@ assert.match(zoteroClient, /function buildZoteroItem\(/, "Zotero item mapping sh
 assert.match(zoteroClient, /function buildZoteroAttachment\(/, "PDF attachment mapping should live in zotero-client.js");
 assert.match(zoteroClient, /function formatZoteroTargetPath\(/, "target tree path formatting should be reusable");
 assert.match(zoteroClient, /function buildZoteroTargetTreeRows\(/, "target tree visible rows should be computed from hierarchy state");
+assert.match(zoteroClient, /function parseSuggestionResponse\(/, "AI collection suggestion parsing should live in the shared Zotero client");
 assert.match(zoteroClient, /itemType:\s*"preprint"/, "arXiv papers should map to Zotero preprint items");
 assert.match(zoteroClient, /mimeType:\s*"application\/pdf"/, "PDF attachments should use application/pdf");
 
@@ -47,6 +48,7 @@ for (const messageType of [
 
 assert.match(background, /importScripts\("zotero-client\.js"\)/, "background should load the shared Zotero client");
 assert.match(background, /function savePaperToZotero\(/, "background should save papers to Zotero");
+assert.match(background, /ArxivMateZotero\.parseSuggestionResponse\(text,\s*targets\)/, "background should use the shared tolerant Zotero suggestion parser");
 assert.match(background, /function saveZoteroPdfAttachment\(/, "background should save PDF bytes as Zotero attachments");
 assert.match(background, /connector\/saveItems/, "background should call Zotero saveItems");
 assert.match(background, /connector\/updateSession/, "background should move save sessions into the selected target");
@@ -78,6 +80,7 @@ assert.match(content, /pointerout/, "Zotero target tree should listen for pointe
 assert.match(content, /function toggleZoteroTreeNode\(/, "Zotero target tree should support manual disclosure toggles");
 assert.match(content, /alc-zotero-tree-toggle/, "Zotero target rows should include tree disclosure controls");
 assert.match(content, /function suggestZoteroTargets\(/, "content should ask the LLM for category suggestions");
+assert.match(content, /createSuggestionFallback\?\.\(paper,\s*zoteroState\.targets/, "content should locally fall back when the model/backend returns no usable Zotero suggestion");
 assert.match(content, /function saveToZotero\(/, "content should save the paper to Zotero");
 assert.match(content, /function prepareZoteroPdfPayload\(/, "content should prepare a real PDF payload when possible");
 assert.match(content, /noteText:\s*zoteroState\.note/, "Zotero save should include the optional note text");

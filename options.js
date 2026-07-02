@@ -17,7 +17,19 @@ const modelPresetsNode = document.querySelector("#model-presets");
 const exportBackupButton = document.querySelector("#export-backup");
 const importBackupInput = document.querySelector("#import-backup");
 const backupStatusNode = document.querySelector("#backup-status");
+const importLocalModelsButton = document.querySelector("#import-local-models");
+const chooseLocalModelFilesButton = document.querySelector("#choose-local-model-files");
+const importLocalModelFilesInput = document.querySelector("#import-local-model-files");
+const localModelPathsInput = document.querySelector("#local-model-paths");
+const localModelImportResultNode = document.querySelector("#local-model-import-result");
+const saveUiPreferencesButton = document.querySelector("#save-ui-preferences");
 const I18N = window.ArxivMateI18n;
+
+const DEFAULT_LOCAL_MODEL_CONFIG_PATHS = [
+  "~/.codex/config.toml",
+  "~/.codex/auth.json",
+  "~/.claude/settings.json"
+];
 
 const PROVIDER_PRESETS = {
   openai: {
@@ -34,6 +46,13 @@ const PROVIDER_PRESETS = {
     label: "MiniMax",
     baseUrl: "https://api.minimaxi.com/v1",
     model: "MiniMax-M3"
+  },
+  anthropic: {
+    label: "Claude / Anthropic-compatible",
+    labelZh: "Claude / Anthropic 兼容",
+    labelEn: "Claude / Anthropic-compatible",
+    baseUrl: "https://api.anthropic.com",
+    model: ""
   },
   ollama: {
     label: "Ollama local",
@@ -145,19 +164,9 @@ addProfileButton.addEventListener("click", () => {
   renderProfiles();
 });
 
-form.addEventListener("submit", async (event) => {
+form.addEventListener("submit", (event) => {
   event.preventDefault();
-  setStatus(t("saving"));
-  setFormBusy(true);
-  try {
-    await saveCurrentSettings();
-    const warning = settings?.storageWarning ? `（同步备份未完成：${settings.storageWarning}；本地设置已保存）` : "";
-    setStatus(`${t("settingsSaved", { count: profiles.length })}${warning}`);
-  } catch (error) {
-    setStatus(error.message || String(error), true);
-  } finally {
-    setFormBusy(false);
-  }
+  setStatus(t("chooseSpecificSave"));
 });
 
 form.language.addEventListener("change", () => {
@@ -170,18 +179,30 @@ form.appearance.addEventListener("change", () => {
   applyAppearance(form.appearance.value);
 });
 
+saveUiPreferencesButton?.addEventListener("click", () => {
+  saveUiPreferences();
+});
+
 checkUpdateButton.addEventListener("click", () => {
   checkForUpdate(true);
 });
 
 exportBackupButton.addEventListener("click", exportBackup);
 importBackupInput.addEventListener("change", importBackup);
+importLocalModelsButton.addEventListener("click", () => {
+  importLocalModelPaths();
+});
+chooseLocalModelFilesButton.addEventListener("click", () => {
+  importLocalModelFilesInput.click();
+});
+importLocalModelFilesInput.addEventListener("change", importLocalModelFiles);
 
 async function loadSettings() {
   try {
     settings = await sendMessage({ type: "getSettings" });
     profiles = normalizeProfiles(settings.modelProfiles, settings);
     selectedProfileId = profiles[0]?.id || "";
+    localModelPathsInput.value = normalizeLocalModelConfigPaths(settings.localModelConfigPaths).join("\n");
     form.language.value = normalizeLanguage(settings.language);
     currentLanguage = form.language.value;
     form.appearance.value = normalizeAppearance(settings.appearance);
@@ -194,20 +215,709 @@ async function loadSettings() {
   }
 }
 
-async function saveCurrentSettings() {
+async function saveModelProfile(id = selectedProfileId) {
   readSelectedProfileFromDom();
+  selectedProfileId = id || selectedProfileId;
+  const profile = profiles.find((item) => item.id === selectedProfileId);
+  setStatus(t("saving"));
+  setFormBusy(true);
+  try {
+    await saveCurrentSettings({
+      modelProfiles: profiles,
+      localModelConfigPaths: readLocalModelPaths()
+    }, { syncProfiles: true });
+    const warning = settings?.storageWarning ? `（同步备份未完成：${settings.storageWarning}；本地设置已保存）` : "";
+    setStatus(`${t("modelProfileSaved", { name: profile?.name || profile?.model || t("untitledProfile") })}${warning}`);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    setFormBusy(false);
+  }
+}
+
+async function saveModelProfilesAfterMutation(message) {
+  setStatus(t("saving"));
+  setFormBusy(true);
+  try {
+    await saveCurrentSettings({
+      modelProfiles: profiles,
+      localModelConfigPaths: readLocalModelPaths()
+    }, { syncProfiles: true });
+    const warning = settings?.storageWarning ? `（同步备份未完成：${settings.storageWarning}；本地设置已保存）` : "";
+    setStatus(`${message}${warning}`);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    setFormBusy(false);
+  }
+}
+
+async function saveUiPreferences() {
+  const nextLanguage = normalizeLanguage(form.language.value);
+  const nextAppearance = normalizeAppearance(form.appearance.value);
+  setStatus(t("saving"));
+  setFormBusy(true);
+  try {
+    const saved = await sendMessage({
+      type: "saveSettings",
+      settings: {
+        ...(settings || {}),
+        language: nextLanguage,
+        appearance: nextAppearance,
+        modelProfiles: settings?.modelProfiles || profiles,
+        localModelConfigPaths: normalizeLocalModelConfigPaths(settings?.localModelConfigPaths || readLocalModelPaths())
+      }
+    });
+    settings = {
+      ...saved,
+      modelProfiles: settings?.modelProfiles || saved.modelProfiles
+    };
+    form.language.value = nextLanguage;
+    form.appearance.value = nextAppearance;
+    currentLanguage = nextLanguage;
+    applyAppearance(nextAppearance);
+    applyLanguage(currentLanguage);
+    renderProfiles();
+    const warning = saved?.storageWarning ? `（同步备份未完成：${saved.storageWarning}；本地设置已保存）` : "";
+    setStatus(`${t("uiPreferencesSaved")}${warning}`);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    setFormBusy(false);
+  }
+}
+
+async function saveCurrentSettings(patch = {}, { syncProfiles = true } = {}) {
   const next = {
     ...(settings || {}),
-    language: normalizeLanguage(form.language.value),
-    appearance: normalizeAppearance(form.appearance.value),
-    modelProfiles: profiles
+    ...patch
   };
   settings = await sendMessage({ type: "saveSettings", settings: next });
-  profiles = normalizeProfiles(settings.modelProfiles, settings);
-  if (!profiles.some((profile) => profile.id === selectedProfileId)) {
-    selectedProfileId = profiles[0]?.id || "";
+  if (syncProfiles) {
+    profiles = normalizeProfiles(settings.modelProfiles, settings);
+    if (!profiles.some((profile) => profile.id === selectedProfileId)) {
+      selectedProfileId = profiles[0]?.id || "";
+    }
+    renderProfiles();
   }
-  renderProfiles();
+}
+
+async function importLocalModelFiles(event) {
+  const files = Array.from(event.target.files || []);
+  if (!files.length) return;
+  setStatus(t("importingLocalModels"));
+  try {
+    const candidates = await parseLocalModelConfigFiles(files);
+    if (!candidates.length) {
+      setStatus(t("noImportedModelsFound"), true);
+      return;
+    }
+    const importResult = autoAddImportedModelProfiles(candidates);
+    renderLocalModelImportResult(importResult);
+    setStatus(importResult.addedProfiles.length
+      ? t("importedModelAutoAdded", { count: importResult.addedProfiles.length })
+      : t("importedModelAlreadyAdded"));
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    event.target.value = "";
+  }
+}
+
+async function importLocalModelPaths() {
+  const paths = readLocalModelPaths();
+  if (!paths.length) {
+    setStatus(t("noImportedModelsFound"), true);
+    return;
+  }
+  setStatus(t("importingLocalModels"));
+  setFormBusy(true);
+  try {
+    const result = await sendMessage({
+      type: "readLocalModelConfigPaths",
+      paths
+    });
+    const candidates = parseLocalModelConfigDocuments(result.documents || []);
+    const errors = Array.isArray(result.errors) ? result.errors.filter(Boolean) : [];
+    const readableErrors = summarizeLocalModelReadErrors(errors);
+    if (!candidates.length) {
+      renderLocalModelImportResult({
+        addedProfiles: [],
+        skippedCandidates: [],
+        errors: readableErrors,
+        isError: true
+      });
+      setStatus(readableErrors[0] || t("noImportedModelsFound"), true);
+      return;
+    }
+    const importResult = autoAddImportedModelProfiles(candidates);
+    renderLocalModelImportResult({
+      ...importResult,
+      errors: readableErrors
+    });
+    setStatus(importResult.addedProfiles.length
+      ? t("importedModelAutoAdded", { count: importResult.addedProfiles.length })
+      : t("importedModelAlreadyAdded"));
+  } catch (error) {
+    const errors = summarizeLocalModelReadErrors([error.message || String(error)]);
+    renderLocalModelImportResult({
+      addedProfiles: [],
+      skippedCandidates: [],
+      errors,
+      isError: true
+    });
+    setStatus(errors[0], true);
+  } finally {
+    setFormBusy(false);
+  }
+}
+
+async function parseLocalModelConfigFiles(files) {
+  const documents = await Promise.all(Array.from(files || []).map(async (file) => ({
+    name: file.name || "config",
+    text: typeof file.text === "function" ? await file.text() : String(file.text || file.content || "")
+  })));
+  return parseLocalModelConfigDocuments(documents);
+}
+
+function parseLocalModelConfigDocuments(documents) {
+  const secrets = {};
+  const candidates = [];
+
+  (documents || []).forEach((document) => {
+    const name = document.name || "";
+    const text = document.text || "";
+    const lowerName = name.toLowerCase();
+
+    Object.assign(secrets, collectEnvValuesFromText(text, lowerName));
+
+    if (lowerName.endsWith(".toml") || /\[model_providers\./.test(text) || /\bmodel_provider\s*=/.test(text)) {
+      candidates.push(...parseCodexConfigToml(text, name));
+    }
+
+    if (lowerName.endsWith(".json") || looksLikeJson(text)) {
+      try {
+        candidates.push(...parseClaudeSettingsJson(JSON.parse(text), name));
+      } catch {
+        // Not every .txt/.env snippet that starts with "{" is useful JSON.
+      }
+    }
+
+    if (lowerName.endsWith(".env") || /(^|\n)\s*(OPENAI|ANTHROPIC|CLAUDE|CODEX)_[A-Z0-9_]+\s*=/.test(text)) {
+      candidates.push(...parseEnvModelConfig(text, name));
+    }
+  });
+
+  const hydrated = candidates.map((candidate) => hydrateImportedCandidate(candidate, secrets));
+  return dedupeImportedModelCandidates(suppressHydratedFallbackCandidates(hydrated));
+}
+
+function readLocalModelPaths() {
+  return normalizeLocalModelConfigPaths(localModelPathsInput?.value);
+}
+
+function normalizeLocalModelConfigPaths(value) {
+  const list = Array.isArray(value)
+    ? value
+    : String(value || "").split(/\r?\n|,/);
+  const normalized = list
+    .map((pathValue) => String(pathValue || "").trim())
+    .filter(Boolean);
+  const paths = normalized.length ? normalized : DEFAULT_LOCAL_MODEL_CONFIG_PATHS;
+  return [...new Set(paths)];
+}
+
+function parseCodexConfigToml(text, sourceName = "config.toml") {
+  const parsed = parseSimpleToml(text);
+  const root = parsed.root || {};
+  const candidates = [];
+  Object.entries(parsed.sections || {}).forEach(([sectionName, section]) => {
+    if (!sectionName.startsWith("model_providers.")) return;
+    const providerName = sectionName.replace(/^model_providers\./, "") || section.name || "custom";
+    const baseUrl = normalizeCodexApiBaseUrl(section.base_url || section.baseUrl || "");
+    const model = String(section.model || root.model || "").trim();
+    const provider = inferProvider(baseUrl);
+    const authKeyName = section.env_key || (section.requires_openai_auth ? "OPENAI_API_KEY" : "");
+    candidates.push({
+      source: "Codex",
+      sourceName,
+      name: buildImportedProfileName("Codex", section.name || providerName, model),
+      provider,
+      baseUrl,
+      apiKey: section.api_key || section.experimental_bearer_token || "",
+      authKeyName,
+      model,
+      warning: section.wire_api && section.wire_api !== "chat" && section.wire_api !== "chat_completions"
+        ? t("localModelImportWarning")
+        : ""
+    });
+  });
+
+  if (!candidates.length && (root.base_url || root.api_key || root.model)) {
+    const baseUrl = normalizeCodexApiBaseUrl(root.base_url || "");
+    candidates.push({
+      source: "Codex",
+      sourceName,
+      name: buildImportedProfileName("Codex", root.model_provider || "custom", root.model),
+      provider: inferProvider(baseUrl),
+      baseUrl,
+      apiKey: root.api_key || root.experimental_bearer_token || "",
+      authKeyName: root.requires_openai_auth ? "OPENAI_API_KEY" : "",
+      model: String(root.model || "").trim(),
+      warning: root.wire_api && root.wire_api !== "chat" && root.wire_api !== "chat_completions"
+        ? t("localModelImportWarning")
+        : ""
+    });
+  }
+
+  return candidates.filter(hasImportedModelSignal);
+}
+
+function parseClaudeSettingsJson(value, sourceName = "settings.json") {
+  const env = collectLocalModelEnvValues(value);
+  const candidates = [];
+
+  if (env.CODEX_API_KEY || env.CODEX_BASE_URL || env.CODEX_MODEL) {
+    const baseUrl = normalizeApiBaseUrl(env.CODEX_BASE_URL || env.BASE_URL || "");
+    candidates.push({
+      source: "Codex",
+      sourceName,
+      name: buildImportedProfileName("Codex", sourceName, env.CODEX_MODEL || env.MODEL),
+      provider: inferProvider(baseUrl),
+      baseUrl,
+      apiKey: env.CODEX_API_KEY || "",
+      authKeyName: "CODEX_API_KEY",
+      model: env.CODEX_MODEL || env.MODEL || "",
+      fallbackOnly: !(env.CODEX_BASE_URL || env.BASE_URL || env.CODEX_MODEL || env.MODEL)
+    });
+  }
+
+  if (env.OPENAI_BASE_URL || env.OPENAI_MODEL || (env.OPENAI_API_KEY && env.BASE_URL)) {
+    const baseUrl = normalizeApiBaseUrl(env.OPENAI_BASE_URL || env.BASE_URL || "");
+    candidates.push({
+      source: sourceName.toLowerCase().includes("auth") ? "Codex" : "OpenAI",
+      sourceName,
+      name: buildImportedProfileName("OpenAI", sourceName, env.OPENAI_MODEL || (baseUrl ? env.MODEL : "")),
+      provider: inferProvider(baseUrl),
+      baseUrl,
+      apiKey: env.OPENAI_API_KEY || "",
+      authKeyName: "OPENAI_API_KEY",
+      model: env.OPENAI_MODEL || (baseUrl ? env.MODEL : "") || PROVIDER_PRESETS.openai.model,
+      fallbackOnly: false
+    });
+  }
+
+  if (env.ANTHROPIC_BASE_URL || env.CLAUDE_BASE_URL || env.ANTHROPIC_MODEL || env.CLAUDE_MODEL) {
+    const baseUrl = normalizeApiBaseUrl(env.ANTHROPIC_BASE_URL || env.CLAUDE_BASE_URL || "");
+    const model = env.ANTHROPIC_MODEL || env.CLAUDE_MODEL || env.MODEL || "";
+    candidates.push({
+      source: "Claude",
+      sourceName,
+      name: buildImportedProfileName("Claude", sourceName, model),
+      provider: "anthropic",
+      baseUrl,
+      apiKey: env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY || env.CLAUDE_API_KEY || "",
+      authKeyName: env.ANTHROPIC_AUTH_TOKEN ? "ANTHROPIC_AUTH_TOKEN" : "ANTHROPIC_API_KEY",
+      model
+    });
+  }
+
+  candidates.push(...parseProviderSwitchCandidates(value, sourceName));
+
+  return candidates.filter(hasImportedModelSignal);
+}
+
+function parseProviderSwitchCandidates(value, sourceName = "settings.json") {
+  const activeRefs = collectActiveProviderRefs(value);
+  const entries = [];
+  collectProviderLikeObjects(value, entries);
+  const selected = activeRefs.length
+    ? entries
+      .map((entry) => ({
+        entry,
+        ref: activeRefs.find((active) => providerEntryMatchesActiveRef(entry, active))
+      }))
+      .filter((item) => item.ref)
+    : entries.map((entry) => ({ entry, ref: null }));
+
+  return selected
+    .map(({ entry, ref }) => providerEntryToImportedCandidate(entry, ref, sourceName))
+    .filter(Boolean);
+}
+
+function collectActiveProviderRefs(value, refs = []) {
+  if (!value || typeof value !== "object") return refs;
+  Object.entries(value).forEach(([key, item]) => {
+    const keyText = String(key || "");
+    if (typeof item === "string" && /(?:current|active|selected).*provider|provider.*(?:current|active|selected)/i.test(keyText)) {
+      refs.push({
+        id: item,
+        source: /claude|anthropic/i.test(keyText) ? "Claude" : /codex/i.test(keyText) ? "Codex" : ""
+      });
+    }
+    if (item && typeof item === "object") collectActiveProviderRefs(item, refs);
+  });
+  return refs;
+}
+
+function collectProviderLikeObjects(value, entries = [], path = []) {
+  if (!value || typeof value !== "object") return entries;
+  if (!Array.isArray(value)) {
+    const baseUrl = firstConfigField(value, ["apiBaseUrl", "api_base_url", "baseUrl", "base_url", "apiUrl", "api_url", "url", "endpoint"]);
+    const apiKey = firstConfigField(value, ["apiKey", "api_key", "authToken", "auth_token", "token", "key"]);
+    const model = firstConfigField(value, ["model", "modelName", "model_name", "defaultModel", "default_model"]);
+    if (baseUrl && (apiKey || model)) {
+      entries.push({
+        value,
+        path: path.join("."),
+        id: firstConfigField(value, ["id", "providerId", "provider_id", "name", "provider", "slug"]),
+        name: firstConfigField(value, ["name", "label", "title", "provider", "id"]),
+        baseUrl,
+        apiKey,
+        model,
+        protocol: firstConfigField(value, ["protocol", "apiProtocol", "api_protocol", "wireApi", "wire_api"])
+      });
+    }
+  }
+  Object.entries(value).forEach(([key, item]) => {
+    if (item && typeof item === "object") collectProviderLikeObjects(item, entries, [...path, key]);
+  });
+  return entries;
+}
+
+function providerEntryMatchesActiveRef(entry, active) {
+  const target = normalizeImportCompare(active?.id);
+  if (!target) return false;
+  return [
+    entry.id,
+    entry.name,
+    entry.value?.id,
+    entry.value?.name,
+    entry.value?.provider,
+    entry.value?.slug
+  ].some((item) => normalizeImportCompare(item) === target);
+}
+
+function providerEntryToImportedCandidate(entry, activeRef, sourceName) {
+  const source = activeRef?.source || guessImportedProviderSource(entry, sourceName);
+  const provider = source === "Claude" || /anthropic|claude/i.test(entry.protocol || "")
+    ? "anthropic"
+    : inferProvider(entry.baseUrl);
+  const label = entry.name || activeRef?.id || sourceName;
+  return {
+    source,
+    sourceName,
+    name: buildImportedProfileName(source, label, entry.model),
+    provider,
+    baseUrl: normalizeApiBaseUrl(entry.baseUrl),
+    apiKey: entry.apiKey || "",
+    model: String(entry.model || "").trim()
+  };
+}
+
+function guessImportedProviderSource(entry, sourceName) {
+  const text = [sourceName, entry.path, entry.name, entry.protocol, entry.baseUrl].join(" ");
+  if (/claude|anthropic/i.test(text)) return "Claude";
+  if (/codex/i.test(text)) return "Codex";
+  if (/openai/i.test(text)) return "OpenAI";
+  if (/minimax|minimaxi/i.test(text)) return "MiniMax";
+  if (/deepseek/i.test(text)) return "DeepSeek";
+  return "Local";
+}
+
+function firstConfigField(object, keys) {
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(object, key)) continue;
+    const value = object[key];
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      const text = String(value).trim();
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
+function normalizeImportCompare(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function parseEnvModelConfig(text, sourceName = ".env") {
+  const env = parseEnvVars(text);
+  return parseClaudeSettingsJson({ env }, sourceName);
+}
+
+function autoAddImportedModelProfiles(candidates) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  if (!list.length) return { addedProfiles: [], skippedCandidates: [] };
+  readSelectedProfileFromDom();
+  const addedProfiles = [];
+  const skippedCandidates = [];
+  list.forEach((candidate) => {
+    if (!candidate) return;
+    if (hasMatchingImportedProfile(candidate)) {
+      skippedCandidates.push(candidate);
+      return;
+    }
+    addedProfiles.push(addImportedModelProfile(candidate, { render: false }));
+  });
+  if (addedProfiles.length) {
+    revealApiKey = false;
+    renderProfiles();
+  }
+  return { addedProfiles, skippedCandidates };
+}
+
+function renderLocalModelImportResult(result = {}) {
+  if (!localModelImportResultNode) return;
+  const addedProfiles = Array.isArray(result.addedProfiles) ? result.addedProfiles : [];
+  const skippedCandidates = Array.isArray(result.skippedCandidates) ? result.skippedCandidates : [];
+  const errors = Array.isArray(result.errors) ? result.errors.filter(Boolean) : [];
+  if (!addedProfiles.length && !skippedCandidates.length && !errors.length) {
+    localModelImportResultNode.hidden = true;
+    localModelImportResultNode.innerHTML = "";
+    return;
+  }
+  const title = addedProfiles.length
+    ? t("importedModelAutoAdded", { count: addedProfiles.length })
+    : skippedCandidates.length
+      ? t("importedModelAlreadyAdded")
+      : t("noImportedModelsFound");
+  const names = addedProfiles.map((profile) => profile.name || profile.model || t("untitledProfile"));
+  const skippedNames = skippedCandidates.map((candidate) => candidate.name || candidate.model || t("untitledProfile"));
+  localModelImportResultNode.hidden = false;
+  localModelImportResultNode.classList.toggle("is-error", Boolean(result.isError) && !addedProfiles.length);
+  localModelImportResultNode.innerHTML = `
+    <strong>${escapeHtml(title)}</strong>
+    ${addedProfiles.length ? `<p>${escapeHtml(t("importedModelResultHint"))}</p>` : ""}
+    ${names.length ? `<ul>${names.map((name) => `<li>${escapeHtml(name)}</li>`).join("")}</ul>` : ""}
+    ${skippedNames.length ? `<p>${escapeHtml(t("importedModelSkippedExisting", { names: skippedNames.join("、") }))}</p>` : ""}
+    ${errors.length ? `<p>${escapeHtml(errors.slice(0, 2).join("；"))}</p>` : ""}
+  `;
+}
+
+function summarizeLocalModelReadErrors(errors) {
+  const list = (Array.isArray(errors) ? errors : [])
+    .map((error) => String(error || "").trim())
+    .filter(Boolean);
+  if (!list.length) return [];
+  if (list.some((error) => /native messaging host not found|specified native messaging host not found/i.test(error))) {
+    return [t("localModelHelperMissing")];
+  }
+  if (list.some((error) => /不是可直接读取的绝对路径|~ 路径需要 native helper|not a directly readable absolute path/i.test(error))) {
+    return [t("localModelAbsolutePathNeeded")];
+  }
+  return [t("localModelReadFallback"), ...list.slice(0, 2)];
+}
+
+function hasMatchingImportedProfile(candidate) {
+  const provider = isWebChatProvider(candidate.provider) ? "custom" : (candidate.provider || inferProvider(candidate.baseUrl));
+  const baseUrl = normalizeApiBaseUrl(candidate.baseUrl || (PROVIDER_PRESETS[provider]?.baseUrl || "")).toLowerCase();
+  const model = normalizeModelName(candidate.model || PROVIDER_PRESETS[provider]?.model || "");
+  return profiles.some((profile) => {
+    const profileProvider = isWebChatProvider(profile.provider) ? "custom" : (profile.provider || inferProvider(profile.baseUrl));
+    return profileProvider === provider
+      && normalizeApiBaseUrl(profile.baseUrl).toLowerCase() === baseUrl
+      && normalizeModelName(profile.model) === model;
+  });
+}
+
+function addImportedModelProfile(candidate, { render = true } = {}) {
+  const provider = isWebChatProvider(candidate.provider) ? "custom" : (candidate.provider || inferProvider(candidate.baseUrl));
+  const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
+  const profile = createProfile(provider);
+  profile.name = candidate.name || providerDisplayName(provider);
+  profile.provider = provider;
+  profile.baseUrl = candidate.baseUrl || preset.baseUrl || "";
+  profile.apiKey = candidate.apiKey || "";
+  profile.model = candidate.model || preset.model || "";
+  profile.reasoningLevel = defaultReasoningLevel(provider, profile.model);
+  normalizeProfileNumbers(profile);
+  profiles.push(profile);
+  selectedProfileId = profile.id;
+  if (render) {
+    revealApiKey = false;
+    renderProfiles();
+    setStatus(t("importedModelNeedsSave"));
+  }
+  return profile;
+}
+
+function hydrateImportedCandidate(candidate, secrets) {
+  const provider = candidate.provider || inferProvider(candidate.baseUrl);
+  const apiKey = candidate.apiKey
+    || (candidate.authKeyName && secrets[candidate.authKeyName])
+    || (provider === "openai" && secrets.OPENAI_API_KEY)
+    || (candidate.source === "Claude" && (secrets.ANTHROPIC_AUTH_TOKEN || secrets.ANTHROPIC_API_KEY))
+    || "";
+  return {
+    ...candidate,
+    provider,
+    baseUrl: normalizeApiBaseUrl(candidate.baseUrl),
+    apiKey,
+    model: String(candidate.model || "").trim()
+  };
+}
+
+function dedupeImportedModelCandidates(candidates) {
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    if (!hasImportedModelSignal(candidate)) return false;
+    const key = [
+      candidate.source,
+      candidate.provider,
+      normalizeApiBaseUrl(candidate.baseUrl).toLowerCase(),
+      String(candidate.model || "").toLowerCase(),
+      String(candidate.apiKey || "").slice(0, 12)
+    ].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function suppressHydratedFallbackCandidates(candidates) {
+  const richSecrets = new Set(
+    candidates
+      .filter((candidate) => !candidate.fallbackOnly && candidate.apiKey)
+      .map((candidate) => candidate.apiKey)
+  );
+  return candidates.filter((candidate) => !(candidate.fallbackOnly && candidate.apiKey && richSecrets.has(candidate.apiKey)));
+}
+
+function hasImportedModelSignal(candidate) {
+  return Boolean(candidate && (candidate.baseUrl || candidate.apiKey || candidate.model || candidate.authKeyName));
+}
+
+function collectEnvValuesFromText(text, lowerName = "") {
+  if (lowerName.endsWith(".json") || looksLikeJson(text)) {
+    try {
+      return collectLocalModelEnvValues(JSON.parse(text));
+    } catch {
+      return {};
+    }
+  }
+  return parseEnvVars(text);
+}
+
+function collectLocalModelEnvValues(value, target = {}) {
+  if (!value || typeof value !== "object") return target;
+  Object.entries(value).forEach(([key, item]) => {
+    const normalizedKey = normalizeEnvKey(key);
+    if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+      if (isKnownModelEnvKey(normalizedKey)) {
+        target[normalizedKey] = String(item);
+      }
+      return;
+    }
+    collectLocalModelEnvValues(item, target);
+  });
+  return target;
+}
+
+function parseEnvVars(text) {
+  const env = {};
+  String(text || "").split(/\r?\n/).forEach((line) => {
+    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!match) return;
+    const key = normalizeEnvKey(match[1]);
+    if (!isKnownModelEnvKey(key)) return;
+    env[key] = unquoteConfigValue(match[2]);
+  });
+  return env;
+}
+
+function isKnownModelEnvKey(key) {
+  return [
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "CLAUDE_API_KEY",
+    "CLAUDE_BASE_URL",
+    "CLAUDE_MODEL",
+    "CODEX_API_KEY",
+    "CODEX_BASE_URL",
+    "CODEX_MODEL",
+    "BASE_URL",
+    "MODEL"
+  ].includes(key);
+}
+
+function normalizeEnvKey(key) {
+  return String(key || "").trim().toUpperCase();
+}
+
+function parseSimpleToml(text) {
+  const root = {};
+  const sections = {};
+  let current = root;
+  String(text || "").split(/\r?\n/).forEach((rawLine) => {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) return;
+    const section = line.match(/^\[([^\]]+)\]$/);
+    if (section) {
+      current = sections[section[1].trim()] ||= {};
+      return;
+    }
+    const pair = line.match(/^([A-Za-z0-9_.-]+)\s*=\s*(.+)$/);
+    if (!pair) return;
+    current[pair[1]] = parseTomlValue(pair[2]);
+  });
+  return { root, sections };
+}
+
+function stripTomlComment(line) {
+  let quote = "";
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if ((char === "\"" || char === "'") && line[index - 1] !== "\\") {
+      quote = quote === char ? "" : quote || char;
+    }
+    if (char === "#" && !quote) return line.slice(0, index);
+  }
+  return line;
+}
+
+function parseTomlValue(rawValue) {
+  const value = rawValue.trim();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (/^["']/.test(value)) return unquoteConfigValue(value);
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : value;
+}
+
+function unquoteConfigValue(value) {
+  const trimmed = String(value || "").trim();
+  if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1).replace(/\\"/g, "\"").replace(/\\'/g, "'");
+  }
+  return trimmed;
+}
+
+function looksLikeJson(text) {
+  return /^[\s\r\n]*[\[{]/.test(String(text || ""));
+}
+
+function normalizeApiBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function normalizeCodexApiBaseUrl(value) {
+  const baseUrl = normalizeApiBaseUrl(value);
+  if (!baseUrl) return "";
+  if (/\/v1(?:\/|$)/i.test(baseUrl)) return baseUrl;
+  if (/\/(?:chat\/completions|responses|messages|models)$/i.test(baseUrl)) return baseUrl;
+  return `${baseUrl}/v1`;
+}
+
+function buildImportedProfileName(source, label, model) {
+  const localPrefix = I18N.resolveLanguage(currentLanguage) === "zh-CN" ? "本地" : "Local";
+  const parts = [`${localPrefix} ${source}`, model || label].filter(Boolean);
+  return parts.join(" · ");
 }
 
 function renderProfiles() {
@@ -228,6 +938,10 @@ function renderProfiles() {
     ${renderSetupGuide()}
     <div class="profile-manager">
       <aside class="profile-list" aria-label="${escapeAttr(t("profileList"))}">
+        <div class="profile-list-head">
+          <span>${escapeHtml(t("modelProfiles"))}</span>
+          <b>${escapeHtml(String(profiles.length))}</b>
+        </div>
         ${profiles.map((profile) => renderProfileListItem(profile)).join("")}
       </aside>
       <article class="profile-editor profile-card" data-id="${escapeAttr(selectedProfile.id)}">
@@ -326,10 +1040,11 @@ function renderProviderNotice(profile) {
   if (isWebChatProvider(profile.provider)) {
     return renderWebChatLoginNotice(profile);
   }
+  const noticeKey = profile.provider === "anthropic" ? "providerNoticeAnthropic" : "providerNoticeApi";
   return `
     <section class="provider-notice">
       <strong>${escapeHtml(providerDisplayName(profile.provider))}</strong>
-      <p>${escapeHtml(t("providerNoticeApi", { provider: providerDisplayName(profile.provider) }))}</p>
+      <p>${escapeHtml(t(noticeKey, { provider: providerDisplayName(profile.provider) }))}</p>
     </section>
   `;
 }
@@ -353,11 +1068,13 @@ function renderProfileEditor(profile) {
   const isWebChat = isWebChatProvider(profile.provider);
   return `
     <header class="profile-editor-header">
-      <div>
+      <div class="profile-editor-title">
         <span>${escapeHtml(t("editingProfile"))}</span>
         <strong>${escapeHtml(profile.name || profile.model || t("untitledProfile"))}</strong>
       </div>
       <div class="profile-editor-actions">
+        <output id="profile-action-status" class="profile-action-status" aria-live="polite"></output>
+        <button type="button" class="primary-action" data-action="save-profile">${escapeHtml(t("saveThisModel"))}</button>
         <button type="button" data-action="test-profile">${escapeHtml(t("testModel"))}</button>
         <button type="button" data-action="duplicate">${escapeHtml(t("duplicateProfile"))}</button>
         <button type="button" class="danger" data-action="remove">${escapeHtml(t("remove"))}</button>
@@ -668,7 +1385,7 @@ function handleProfileInput(event) {
   }
 
   if (field === "baseUrl") {
-    profile.provider = inferProvider(profile.baseUrl);
+    profile.provider = resolveSelectedProvider(profile.provider, profile.baseUrl);
     const providerSelect = card.querySelector('[data-field="provider"]');
     if (providerSelect && providerSelect.value !== profile.provider) {
       providerSelect.value = profile.provider;
@@ -704,6 +1421,11 @@ function handleProfileAction(event) {
     return;
   }
 
+  if (action === "save-profile") {
+    saveModelProfile(id);
+    return;
+  }
+
   if (action === "load-models") {
     loadModelsForProfile(id);
     return;
@@ -732,10 +1454,12 @@ function handleProfileAction(event) {
 
   if (action === "remove") {
     if (!confirm(t("confirmRemoveProfile", { name: profile.name || profile.model || t("untitledProfile") }))) return;
+    const removedName = profile.name || profile.model || t("untitledProfile");
     profiles = profiles.filter((item) => item.id !== id);
     if (selectedProfileId === id) selectedProfileId = profiles[0]?.id || "";
     revealApiKey = false;
     renderProfiles();
+    saveModelProfilesAfterMutation(t("modelProfileRemoved", { name: removedName }));
   }
 }
 
@@ -817,7 +1541,7 @@ async function loadModelsForProfile(id, { silent = false, force = true } = {}) {
       updateModelPickerForProfile(id);
     }
     if (!silent) focusModelPickerForProfile(id);
-    if (!silent) setStatus(t("modelsLoaded", { count: models.length }));
+    if (!silent) setStatus(response.warning || t("modelsLoaded", { count: models.length }));
     return models;
   } catch (error) {
     if (!silent) {
@@ -912,10 +1636,7 @@ function readSelectedProfileFromDom() {
   const get = (field) => card.querySelector(`[data-field="${field}"]`);
   const baseUrl = get("baseUrl")?.value || "";
   const selectedProvider = get("provider")?.value || profile.provider;
-  const inferredProvider = inferProvider(baseUrl);
-  const provider = isWebChatProvider(selectedProvider)
-    ? selectedProvider
-    : (inferredProvider !== "custom" ? inferredProvider : selectedProvider);
+  const provider = resolveSelectedProvider(selectedProvider, baseUrl);
   const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
   Object.assign(profile, {
     name: get("name")?.value || "",
@@ -938,10 +1659,7 @@ function normalizeProfiles(value, fallbackSettings) {
   const list = Array.isArray(value) ? value : [];
   if (list.length) {
     return list.map((profile) => {
-      const inferredProvider = inferProvider(profile.baseUrl);
-      const provider = isWebChatProvider(profile.provider)
-        ? profile.provider
-        : (inferredProvider !== "custom" ? inferredProvider : (profile.provider || "custom"));
+      const provider = resolveSelectedProvider(profile.provider || "custom", profile.baseUrl);
       const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
       const model = profile.model || preset.model || "";
       return normalizeProfileNumbers({
@@ -986,6 +1704,23 @@ function normalizeProfiles(value, fallbackSettings) {
     reasoningLevel: normalizeReasoningLevel(fallbackSettings.reasoningLevel),
     useAr5iv: fallbackSettings.useAr5iv !== false
   })];
+}
+
+function resolveSelectedProvider(selectedProvider, baseUrl) {
+  const explicit = normalizeProviderKey(selectedProvider);
+  if (isProtocolLockedProvider(explicit)) return explicit;
+  const inferred = inferProvider(baseUrl);
+  return inferred !== "custom" ? inferred : explicit;
+}
+
+function normalizeProviderKey(provider) {
+  const value = String(provider || "").trim();
+  const match = Object.keys(PROVIDER_PRESETS).find((key) => key.toLowerCase() === value.toLowerCase());
+  return match || "custom";
+}
+
+function isProtocolLockedProvider(provider) {
+  return provider === "anthropic" || isWebChatProvider(provider);
 }
 
 function createProfile(provider) {
@@ -1150,7 +1885,6 @@ function applyLanguage(value) {
   });
   document.querySelector(".hero h1").textContent = t("modelConfig");
   document.querySelector(".section-head h2").textContent = t("modelProfiles");
-  document.querySelector(".section-head p").textContent = t("profilesHelp");
   addProfileButton.textContent = t("addProfile");
   renderAddProfileProviderOptions();
   checkUpdateButton.textContent = t("checkUpdate");
@@ -1334,6 +2068,7 @@ function inferProvider(baseUrl) {
     }
   }
   const host = extractProviderHost(normalized);
+  if (host.includes("anthropic") || /\/anthropic(?:\/|$)/.test(normalized)) return "anthropic";
   if (host.includes("minimax") || host.includes("minimaxi")) return "minimax";
   if (host.includes("deepseek")) return "deepseek";
   if (host.includes("openai")) return "openai";
@@ -1368,8 +2103,15 @@ function createId() {
 }
 
 function setStatus(text, isError = false) {
-  statusNode.textContent = text;
-  statusNode.classList.toggle("is-error", Boolean(isError));
+  const inlineStatusNode = document.querySelector("#profile-action-status");
+  const target = inlineStatusNode || statusNode;
+  if (!target) return;
+  target.textContent = text;
+  target.classList.toggle("is-error", Boolean(isError));
+  if (inlineStatusNode && statusNode) {
+    statusNode.textContent = "";
+    statusNode.classList.remove("is-error");
+  }
 }
 
 function sendMessage(payload) {

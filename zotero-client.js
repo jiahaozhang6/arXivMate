@@ -316,6 +316,225 @@
     ].join("\n");
   }
 
+  function parseSuggestionResponse(text = "", targets = []) {
+    const rows = extractSuggestionRows(parseSuggestionPayload(text), text);
+    const candidates = targetRowsForPrompt(targets);
+    const seen = new Set();
+    return rows
+      .map((row) => normalizeSuggestionRow(row, candidates, targets))
+      .filter((row) => {
+        if (!row || seen.has(row.targetId)) return false;
+        seen.add(row.targetId);
+        return true;
+      })
+      .slice(0, 3);
+  }
+
+  function createSuggestionFallback(paper = {}, targets = [], options = {}) {
+    const candidates = targetRowsForPrompt(targets);
+    if (!candidates.length) return [];
+    const selectedTarget = candidates.find((target) => target.id === clean(options.selectedTargetId));
+    const paperText = normalizeSuggestionLookupText([
+      paper.title,
+      paper.abstract,
+      paper.subjects,
+      paper.comments,
+      paper.venue,
+      paper.fullText
+    ].filter(Boolean).join(" "));
+    const scored = candidates
+      .map((target) => {
+        const path = formatZoteroTargetPath(targets, target.id) || target.path || target.name;
+        const score = scoreTargetForPaper(target, path, paperText);
+        return { target, path, score };
+      })
+      .filter((item) => item.score > 0)
+      .sort((left, right) => right.score - left.score || Number(right.target.recent === true) - Number(left.target.recent === true));
+
+    const picked = scored.slice(0, 3).map((item) => ({
+      targetId: item.target.id,
+      name: item.target.name,
+      path: item.path,
+      reason: "本地分类名与论文信息匹配",
+      confidence: Math.min(0.72, Math.max(0.35, item.score / 160))
+    }));
+
+    if (picked.length) return picked;
+    const fallbackTarget = selectedTarget || candidates.find((target) => target.recent === true) || candidates[0];
+    return [{
+      targetId: fallbackTarget.id,
+      name: fallbackTarget.name,
+      path: formatZoteroTargetPath(targets, fallbackTarget.id) || fallbackTarget.path || fallbackTarget.name,
+      reason: selectedTarget ? "保留当前 Zotero 分类" : "未匹配到明确分类，使用最近可用分类",
+      confidence: 0.2
+    }];
+  }
+
+  function scoreTargetForPaper(target, path, paperText) {
+    if (!paperText) return 0;
+    const nameKey = normalizeSuggestionLookupText(target.name);
+    const pathKey = normalizeSuggestionLookupText(path);
+    let score = 0;
+    if (nameKey && paperText.includes(nameKey)) score += 95;
+    if (pathKey && paperText.includes(pathKey)) score += 120;
+    const tokens = tokenizeSuggestionText(`${target.name} ${path}`);
+    for (const token of tokens) {
+      if (paperText.includes(token)) score += token.length <= 3 ? 12 : 20;
+    }
+    if (target.recent === true && score > 0) score += 6;
+    return score;
+  }
+
+  function tokenizeSuggestionText(value) {
+    const stopwords = new Set([
+      "the", "and", "for", "with", "from", "into", "other", "misc", "model", "models",
+      "paper", "generation", "learning", "computer", "science", "我的文库"
+    ]);
+    return [...new Set(normalizeSuggestionLookupText(value)
+      .split(/[^a-z0-9\u4e00-\u9fff]+/i)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2 && !stopwords.has(token)))];
+  }
+
+  function parseSuggestionPayload(text = "") {
+    const raw = String(text || "").trim();
+    if (!raw) return null;
+    const fenced = Array.from(raw.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)).map((match) => match[1]);
+    const candidates = [
+      ...fenced,
+      raw.match(/\{[\s\S]*\}/)?.[0],
+      raw.match(/\[[\s\S]*\]/)?.[0],
+      raw
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      try {
+        return JSON.parse(candidate);
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  function extractSuggestionRows(payload, text = "") {
+    if (Array.isArray(payload)) return payload;
+    if (payload && typeof payload === "object") {
+      for (const key of ["suggestions", "recommendations", "collections", "targets", "choices"]) {
+        if (Array.isArray(payload[key])) return payload[key];
+      }
+      return [payload];
+    }
+    return String(text || "")
+      .split(/\r?\n/)
+      .map((line) => clean(line).replace(/^[-*\d.)\s]+/, ""))
+      .filter(Boolean);
+  }
+
+  function normalizeSuggestionRow(row, candidates = [], targets = []) {
+    const target = resolveSuggestionTarget(row, candidates, targets);
+    if (!target) return null;
+    const reason = typeof row === "object" && row
+      ? clean(row.reason || row.rationale || row.explanation || row.why).slice(0, 240)
+      : "";
+    const confidence = typeof row === "object" && row
+      ? Math.max(0, Math.min(1, Number(row.confidence) || 0))
+      : 0;
+    return {
+      targetId: target.id,
+      name: target.name,
+      path: formatZoteroTargetPath(targets, target.id) || target.path || target.name,
+      reason,
+      confidence
+    };
+  }
+
+  function resolveSuggestionTarget(row, candidates = [], targets = []) {
+    const idValues = suggestionIdValues(row);
+    const byId = new Map(candidates.map((target) => [target.id, target]));
+    const byLowerId = new Map(candidates.map((target) => [target.id.toLowerCase(), target]));
+    for (const value of idValues) {
+      const direct = clean(value);
+      if (byId.has(direct)) return byId.get(direct);
+      const lower = direct.toLowerCase();
+      if (byLowerId.has(lower)) return byLowerId.get(lower);
+      const embedded = direct.match(/\bC[\w-]+\b/i)?.[0] || "";
+      if (byId.has(embedded)) return byId.get(embedded);
+      if (byLowerId.has(embedded.toLowerCase())) return byLowerId.get(embedded.toLowerCase());
+    }
+
+    const textValues = suggestionTextValues(row);
+    for (const value of textValues) {
+      const target = resolveSuggestionTargetByText(value, candidates, targets);
+      if (target) return target;
+    }
+    return null;
+  }
+
+  function suggestionIdValues(row) {
+    if (typeof row === "string") return [row];
+    if (!row || typeof row !== "object") return [];
+    return [
+      row.targetId,
+      row.id,
+      row.collectionId,
+      row.collection_id,
+      row.zoteroCollectionId,
+      row.zotero_collection_id
+    ];
+  }
+
+  function suggestionTextValues(row) {
+    if (typeof row === "string") return [row];
+    if (!row || typeof row !== "object") return [];
+    return [
+      row.path,
+      row.collection,
+      row.collectionName,
+      row.collection_name,
+      row.target,
+      row.name,
+      row.label,
+      row.title,
+      row.targetId,
+      row.id
+    ];
+  }
+
+  function resolveSuggestionTargetByText(value, candidates = [], targets = []) {
+    const key = normalizeSuggestionLookupText(value);
+    if (!key) return null;
+    const scored = candidates
+      .map((target) => {
+        const path = formatZoteroTargetPath(targets, target.id) || target.path || target.name;
+        const pathKey = normalizeSuggestionLookupText(path);
+        const nameKey = normalizeSuggestionLookupText(target.name);
+        let score = 0;
+        if (key === pathKey) score = 120;
+        else if (key === nameKey) score = 90;
+        else if (key.endsWith(`/${nameKey}`)) score = 70;
+        else if (pathKey.endsWith(`/${key}`)) score = 60;
+        else if (key.length >= 4 && pathKey.includes(key)) score = 40;
+        return { target, score };
+      })
+      .filter((item) => item.score > 0)
+      .sort((left, right) => right.score - left.score);
+    if (!scored.length) return null;
+    const best = scored[0];
+    const second = scored[1];
+    if (second && second.score === best.score && best.score < 120) return null;
+    return best.target;
+  }
+
+  function normalizeSuggestionLookupText(value) {
+    return clean(value)
+      .toLowerCase()
+      .replace(/[\\>｜|→»]+/g, "/")
+      .replace(/\s*\/\s*/g, "/")
+      .replace(/[，,;；。.!?()[\]{}"'`]+/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/\/+/g, "/")
+      .replace(/^\/|\/$/g, "")
+      .trim();
+  }
+
   return {
     ZOTERO_CONNECTOR_API_VERSION,
     ZOTERO_CONNECTOR_BASE_URL,
@@ -326,11 +545,13 @@
     buildZoteroTargetTreeRows,
     buildSuggestionPrompt,
     clean,
+    createSuggestionFallback,
     extractDoi,
     formatZoteroTargetPath,
     getZoteroTargetAncestorIds,
     isZoteroTargetInBranch,
     normalizeTargetsPayload,
+    parseSuggestionResponse,
     parseCreators,
     pruneZoteroHoverExpandedTargetIds,
     targetRowsForPrompt

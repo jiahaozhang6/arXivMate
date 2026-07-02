@@ -148,7 +148,19 @@ button {
   cursor: pointer;
 }
 
+button.primary-action {
+  background: var(--accent);
+  color: var(--button-text);
+}
+
 button + button {
   background: var(--control);
   color: var(--accent);
+}
+
+button:disabled {
+  border-color: rgba(102, 112, 122, 0.35);
+  background: rgba(102, 112, 122, 0.12);
+  color: var(--muted);
+  cursor: not-allowed;
 }

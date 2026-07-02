@@ -27,6 +27,7 @@
   if (!paper.id && !paper.title) return;
 
   removeExistingArxivMateRoots();
+  document.getElementById("arxivmate-panel-static-fallback")?.remove();
 
   if (!isEmbeddedPanel && isPdfPage()) {
     installIframePanel(paper);
@@ -45,9 +46,11 @@
   let activeStreamCancel = null;
   let isGenerating = false;
   let historyJumpIndex = -1;
+  let shouldAutoScrollConversation = true;
   let settingsRefreshPromise = null;
+  let modelSelectInteractionGuardUntil = 0;
   let activeAppearance = "system";
-  let currentLanguage = "system";
+  let currentLanguage = "";
   let systemAppearanceQuery = null;
   let systemAppearanceListenerInstalled = false;
   let panelLayout = getDefaultPanelLayout();
@@ -210,6 +213,7 @@
   const zoteroCurrentPath = $(".alc-zotero-current-path");
   fullTextToggle.checked = true;
   fullTextToggle.disabled = true;
+  chat.addEventListener("scroll", updateConversationAutoScrollFromScroll, { passive: true });
 
   applyLanguage(currentLanguage);
   installPanelEventGuards();
@@ -223,7 +227,7 @@
     panel.classList.add("is-open", "is-embedded");
     fab.remove();
   } else {
-    fab.addEventListener("click", () => togglePanel(true));
+    installFabOpenHandlers();
   }
   onClick(".alc-close", () => {
     if (isEmbeddedPanel) {
@@ -247,11 +251,8 @@
   onClick(".alc-layout-toggle", togglePanelLayoutMode);
   onClick(".alc-restore-layout", restorePanelLayout);
   modelSelect.addEventListener("change", switchChatModel);
-  modelSelect.addEventListener("pointerdown", () => {
-    forceRefreshSettingsFromLocal().catch(() => {});
-  });
-  modelSelect.addEventListener("focus", () => {
-    forceRefreshSettingsFromLocal().catch(() => {});
+  ["pointerdown", "mousedown", "click", "focus", "keydown"].forEach((type) => {
+    modelSelect.addEventListener(type, markModelSelectInteraction, { capture: true });
   });
   zoteroFilter?.addEventListener("input", () => {
     zoteroState.filter = zoteroFilter.value;
@@ -313,10 +314,10 @@
     });
   }
   window.addEventListener("focus", () => {
-    if (isPanelOpen) refreshSettings({ silent: true }).catch(() => {});
+    if (isPanelOpen && !isPanelInteractionActive()) refreshSettings({ silent: true }).catch(() => {});
   });
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && isPanelOpen) refreshSettings({ silent: true }).catch(() => {});
+    if (!document.hidden && isPanelOpen && !isPanelInteractionActive()) refreshSettings({ silent: true }).catch(() => {});
   });
 
   input.addEventListener("input", autoResizeInput);
@@ -341,6 +342,7 @@
 
   loadInitialState();
   hydratePaperMetadata();
+  notifyEmbeddedPanelReady();
 
   function togglePanel(force) {
     isPanelOpen = typeof force === "boolean" ? force : !isPanelOpen;
@@ -350,8 +352,31 @@
     if (isPanelOpen) {
       refreshSettings({ silent: true }).catch(() => {});
       renderConversation(currentConversation);
-      setTimeout(() => input.focus(), 40);
+      setTimeout(() => focusComposerInput(), 40);
     }
+  }
+
+  function installFabOpenHandlers() {
+    if (!fab) return;
+    const openFromEvent = (event) => {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      if (typeof event?.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
+      }
+      togglePanel(true);
+    };
+    ["pointerdown", "pointerup", "mousedown", "mouseup", "click"].forEach((type) => {
+      fab.addEventListener(type, openFromEvent, { capture: true });
+    });
+    fab.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      openFromEvent(event);
+    }, { capture: true });
+  }
+
+  function focusComposerInput() {
+    input.focus();
   }
 
   function onClick(selector, handler) {
@@ -588,40 +613,6 @@
     document.addEventListener("pointercancel", onUp, true);
   }
 
-  function installPageSplitStyles() {
-    if (document.getElementById("arxiv-llm-companion-page-style")) return;
-    const node = document.createElement("style");
-    node.id = "arxiv-llm-companion-page-style";
-    node.textContent = `
-      html.alc-page-split-active {
-        margin-right: var(--alc-split-width, 460px) !important;
-        transition: margin-right 160ms ease;
-      }
-      html.alc-page-split-active body {
-        width: calc(100vw - var(--alc-split-width, 460px)) !important;
-        max-width: 100% !important;
-        overflow-x: auto !important;
-      }
-      html.alc-page-split-active embed[type="application/pdf"],
-      html.alc-page-split-active pdf-viewer {
-        width: calc(100vw - var(--alc-split-width, 460px)) !important;
-        max-width: calc(100vw - var(--alc-split-width, 460px)) !important;
-      }
-      @media (max-width: 900px) {
-        html.alc-page-split-active {
-          margin-right: 0 !important;
-        }
-        html.alc-page-split-active body,
-        html.alc-page-split-active embed[type="application/pdf"],
-        html.alc-page-split-active pdf-viewer {
-          width: 100vw !important;
-          max-width: 100vw !important;
-        }
-      }
-    `;
-    document.documentElement.appendChild(node);
-  }
-
   function removeExistingArxivMateRoots() {
     document.getElementById("arxiv-llm-companion-root")?.remove();
     document.getElementById("arxiv-llm-companion-frame-root")?.remove();
@@ -685,6 +676,11 @@
     const path = typeof event.composedPath === "function" ? event.composedPath() : [];
     if (!path.includes(host)) return;
 
+    if (isNativeSelectOpenEvent(event, path)) {
+      markModelSelectInteraction();
+      return;
+    }
+
     if (isTextInputEvent(event) && path.includes(input)) {
       if (event.type === "keydown" && event.key === "Enter" && !event.shiftKey && !event.isComposing && !event.defaultPrevented) {
         event.preventDefault();
@@ -715,7 +711,7 @@
         input.selectionStart === before.start &&
         input.selectionEnd === before.end;
       if (!unchanged) return;
-      applyManualKey(event, before);
+      applyManualKeyToEditable(input, event, before);
     }, 0);
   }
 
@@ -727,7 +723,8 @@
       event.key === "Tab";
   }
 
-  function applyManualKey(event, before) {
+  function applyManualKeyToEditable(target, event, before = readEditableState(target)) {
+    if (!target || typeof target.setRangeText !== "function") return;
     let text = "";
     let start = before.start;
     let end = before.end;
@@ -735,6 +732,7 @@
     if (event.key.length === 1) {
       text = event.key;
     } else if (event.key === "Enter") {
+      if (target.tagName === "INPUT") return;
       text = "\n";
     } else if (event.key === "Tab") {
       text = "  ";
@@ -746,15 +744,22 @@
       return;
     }
 
-    input.setSelectionRange(start, end);
-    input.setRangeText(text, start, end, "end");
-    input.dispatchEvent(new InputEvent("input", {
+    target.setSelectionRange(start, end);
+    target.setRangeText(text, start, end, "end");
+    target.dispatchEvent(new InputEvent("input", {
       bubbles: true,
       composed: true,
       inputType: text ? "insertText" : "deleteContentBackward",
       data: text || null
     }));
-    autoResizeInput();
+    if (target === input) autoResizeInput();
+  }
+
+  function readEditableState(target) {
+    const value = typeof target?.value === "string" ? target.value : "";
+    const start = Number.isInteger(target?.selectionStart) ? target.selectionStart : value.length;
+    const end = Number.isInteger(target?.selectionEnd) ? target.selectionEnd : start;
+    return { value, start, end };
   }
 
   function isTextInputEvent(event) {
@@ -790,6 +795,7 @@
     currentMode = mode;
     const contextMode = resolveTurnContextMode(mode);
     historyJumpIndex = -1;
+    shouldAutoScrollConversation = true;
     setBusy(true);
     setStatus(withWebChatLoginReminder(contextMode === "full" ? t("preparingFull") : t("preparingFast"), selectedProfile));
     const preview = appendPreviewTurn(userText);
@@ -906,6 +912,42 @@
     if (!zoteroState.targets.length && !zoteroState.loading) {
       await loadZoteroTargets();
     }
+  }
+
+  function isNativeSelectOpenEvent(event, path) {
+    if (!modelSelect || !path.includes(modelSelect)) return false;
+    if (["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "touchstart", "touchmove", "wheel"].includes(event.type)) {
+      return true;
+    }
+    if (event.type !== "keydown") return false;
+    return ["ArrowDown", "ArrowUp", "Enter", " ", "Spacebar", "Escape", "Tab"].includes(event.key);
+  }
+
+  function markModelSelectInteraction() {
+    modelSelectInteractionGuardUntil = Date.now() + 1500;
+  }
+
+  function isModelSelectInteractionActive() {
+    const active = shadow.activeElement;
+    return Date.now() < modelSelectInteractionGuardUntil ||
+      active === modelSelect;
+  }
+
+  function isPanelEditingInteractionActive() {
+    return isPanelEditable(shadow.activeElement);
+  }
+
+  function isPanelEditable(node) {
+    if (!node) return false;
+    if (node.isContentEditable) return true;
+    const tagName = String(node.tagName || "").toLowerCase();
+    return tagName === "textarea" ||
+      tagName === "select" ||
+      (tagName === "input" && node.type !== "button" && node.type !== "submit" && node.type !== "reset");
+  }
+
+  function isPanelInteractionActive() {
+    return isModelSelectInteractionActive() || isPanelEditingInteractionActive();
   }
 
   function closeZoteroDrawer() {
@@ -1085,9 +1127,13 @@
         type: "zoteroSuggestTargets",
         paper,
         targets: zoteroState.targets,
-        profileId: selectedProfile?.id || selectedProfileId
+        profileId: selectedProfile?.id || selectedProfileId,
+        selectedTargetId: zoteroState.selectedTargetId
       });
-      const suggestions = Array.isArray(response?.suggestions) ? response.suggestions : [];
+      const modelSuggestions = Array.isArray(response?.suggestions) ? response.suggestions : [];
+      const suggestions = modelSuggestions.length
+        ? modelSuggestions
+        : createLocalZoteroSuggestionFallback();
       zoteroState = {
         ...zoteroState,
         suggesting: false,
@@ -1103,6 +1149,12 @@
       };
     }
     renderZoteroDrawer();
+  }
+
+  function createLocalZoteroSuggestionFallback() {
+    return window.ArxivMateZotero?.createSuggestionFallback?.(paper, zoteroState.targets, {
+      selectedTargetId: zoteroState.selectedTargetId
+    }) || [];
   }
 
   async function saveToZotero() {
@@ -2168,7 +2220,12 @@
       // Storage listeners are optional; initial settings still cover normal page loads.
     }
     try {
-      chrome.runtime?.onMessage?.addListener((message) => {
+      chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
+        if (message?.type === "openArxivMatePanel") {
+          togglePanel(true);
+          sendResponse?.({ ok: true });
+          return false;
+        }
         if (message?.type !== "settingsChanged") return false;
         applySettingsSnapshot(message.settings, {
           allowEmptyProfiles: Array.isArray(message.settings?.modelProfiles)
@@ -2223,22 +2280,25 @@
   }
 
   function applyLanguage(value) {
+    const languageChanged = normalizeLanguage(value) !== currentLanguage;
     currentLanguage = normalizeLanguage(value);
     const resolved = I18N.resolveLanguage(currentLanguage);
     host.dataset.language = resolved;
-    shadow.querySelectorAll("[data-i18n]").forEach((node) => {
-      node.textContent = t(node.dataset.i18n);
-    });
-    shadow.querySelectorAll("[data-i18n-title]").forEach((node) => {
-      node.title = t(node.dataset.i18nTitle);
-    });
-    shadow.querySelectorAll("[data-i18n-placeholder]").forEach((node) => {
-      node.placeholder = t(node.dataset.i18nPlaceholder);
-    });
-    renderPaperHeader();
-    renderConversation(currentConversation);
-    renderModelSelect();
-    renderZoteroDrawer();
+    if (languageChanged) {
+      shadow.querySelectorAll("[data-i18n]").forEach((node) => {
+        node.textContent = t(node.dataset.i18n);
+      });
+      shadow.querySelectorAll("[data-i18n-title]").forEach((node) => {
+        node.title = t(node.dataset.i18nTitle);
+      });
+      shadow.querySelectorAll("[data-i18n-placeholder]").forEach((node) => {
+        node.placeholder = t(node.dataset.i18nPlaceholder);
+      });
+      renderPaperHeader();
+      renderConversation(currentConversation);
+      renderModelSelect();
+      renderZoteroDrawer();
+    }
   }
 
   function t(key, vars = {}) {
@@ -2259,6 +2319,7 @@
     settingsRefreshPromise = readLatestSettings()
       .then((settings) => {
         if (!settings) throw new Error("No settings snapshot.");
+        if (isPanelInteractionActive()) return true;
         applySettingsSnapshot(settings);
         showModelLoadStatus({ onlyWhenEmpty: false });
         return true;
@@ -2271,16 +2332,6 @@
         settingsRefreshPromise = null;
       });
     return settingsRefreshPromise;
-  }
-
-  async function forceRefreshSettingsFromLocal() {
-    const localSettings = await readLocalSettings();
-    if (getSettingsProfiles(localSettings).length) {
-      applySettingsSnapshot(localSettings);
-      showModelLoadStatus({ onlyWhenEmpty: false });
-      return true;
-    }
-    return refreshSettings({ silent: true });
   }
 
   function applySettingsSnapshot(settings, options = {}) {
@@ -2303,10 +2354,6 @@
     const runtimeSettings = runtimeResult.status === "fulfilled" ? runtimeResult.value : null;
     if (getSettingsProfiles(runtimeSettings).length) return runtimeSettings;
     return storedSettings || runtimeSettings;
-  }
-
-  function readLocalSettings() {
-    return readStoredSettingsSnapshot();
   }
 
   async function readStoredSettingsSnapshot() {
@@ -2448,7 +2495,10 @@
   }
 
   function switchChatModel(event) {
-    const nextProfileId = event.target.value;
+    selectChatModelById(event.target.value);
+  }
+
+  function selectChatModelById(nextProfileId) {
     if (!nextProfileId || nextProfileId === selectedProfileId) return;
     selectedProfileId = nextProfileId;
     selectedModelLabel = buildSelectedModelLabel();
@@ -2724,7 +2774,9 @@
       scrollToMessageIndex(historyJumpIndex, { behavior: "auto", updateStatus: false });
       return;
     }
-    chat.scrollTop = chat.scrollHeight;
+    if (shouldAutoScrollConversation) {
+      chat.scrollTop = chat.scrollHeight;
+    }
   }
 
   function getConversationMessageNodes() {
@@ -2735,6 +2787,22 @@
     const hasMessages = count > 0;
     if (historyPrevButton) historyPrevButton.disabled = !hasMessages;
     if (historyNextButton) historyNextButton.disabled = !hasMessages;
+  }
+
+  function updateConversationAutoScrollFromScroll() {
+    const nearBottom = isChatNearBottom();
+    shouldAutoScrollConversation = nearBottom;
+    if (nearBottom && historyJumpIndex >= 0) {
+      historyJumpIndex = -1;
+      getConversationMessageNodes().forEach((node) => {
+        node.classList.remove("is-jump-target");
+      });
+      updateHistoryJumpButtons();
+    }
+  }
+
+  function isChatNearBottom(threshold = 48) {
+    return chat.scrollHeight - chat.scrollTop - chat.clientHeight <= threshold;
   }
 
   function jumpConversationMessage(direction) {
@@ -2777,6 +2845,7 @@
     const targetIndex = Math.max(0, Math.min(nodes.length - 1, Number(index) || 0));
     const target = nodes[targetIndex];
     historyJumpIndex = targetIndex;
+    shouldAutoScrollConversation = targetIndex >= nodes.length - 1;
     nodes.forEach((node) => {
       node.classList.toggle("is-jump-target", node === target);
     });
@@ -2798,6 +2867,7 @@
 
   function resumeConversationAutoScroll(options = {}) {
     historyJumpIndex = -1;
+    shouldAutoScrollConversation = true;
     getConversationMessageNodes().forEach((node) => {
       node.classList.remove("is-jump-target");
     });
@@ -2845,6 +2915,15 @@
   function setStatus(text, isError = false) {
     status.textContent = text || "";
     status.classList.toggle("is-error", Boolean(isError));
+  }
+
+  function notifyEmbeddedPanelReady() {
+    if (!isEmbeddedPanel || window.parent === window) return;
+    try {
+      window.parent.postMessage({ type: "alc-panel-ready" }, "*");
+    } catch {
+      // The outer PDF host may already be gone after navigation.
+    }
   }
 
   function formatWebChatStatus(status, fallbackLabel = "WebChat") {
@@ -3072,7 +3151,7 @@
   function installIframePanel(paperData) {
     if (!isRuntimeAvailable()) return;
     removeExistingArxivMateRoots();
-    installStandaloneSplitStyles();
+    installPageSplitStyles();
 
     const root = document.createElement("div");
     root.id = "arxiv-llm-companion-frame-root";
@@ -3146,6 +3225,41 @@
         display: block;
         background: transparent;
       }
+      .alc-frame-fallback {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        display: none;
+        place-content: center;
+        gap: 10px;
+        padding: 24px;
+        background: var(--alc-frame-panel);
+        color: #66707a;
+        font: 13px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        text-align: center;
+      }
+      .alc-frame.is-loading .alc-frame-fallback,
+      .alc-frame.is-load-error .alc-frame-fallback {
+        display: grid;
+      }
+      .alc-frame.is-ready .alc-frame-fallback {
+        display: none;
+      }
+      .alc-frame-fallback strong {
+        color: #20242a;
+        font-size: 15px;
+      }
+      .alc-frame-fallback button {
+        min-height: 34px;
+        justify-self: center;
+        border: 1px solid #156f8f;
+        border-radius: 8px;
+        background: #156f8f;
+        color: #fff;
+        font: 800 12px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        padding: 0 12px;
+        cursor: pointer;
+      }
       .alc-frame-resize-edge,
       .alc-frame-resize-corner {
         position: absolute;
@@ -3210,8 +3324,16 @@
 
     const frame = document.createElement("iframe");
     frame.allow = "clipboard-read; clipboard-write";
-    frame.src = `${runtimeUrl("panel.html")}?paper=${encodeURIComponent(JSON.stringify(paperData))}`;
+    const frameSrc = `${runtimeUrl("panel.html")}?paper=${encodeURIComponent(JSON.stringify(paperData))}`;
     frameShell.appendChild(frame);
+    const frameFallback = document.createElement("div");
+    frameFallback.className = "alc-frame-fallback";
+    frameFallback.innerHTML = `
+      <strong>正在打开 arXivMate</strong>
+      <span>如果长时间没有显示，请刷新当前 PDF 页面后再试。</span>
+      <button type="button">刷新页面</button>
+    `;
+    frameShell.appendChild(frameFallback);
     const frameResizeEdge = document.createElement("div");
     frameResizeEdge.className = "alc-frame-resize-edge";
     const frameResizeCorner = document.createElement("div");
@@ -3221,6 +3343,8 @@
     shadowRoot.append(styleNode, fabButton, frameShell);
     let frameLayout = getDefaultPanelLayout();
     let activeFrameGesture = null;
+    let frameReady = false;
+    let frameReadyTimer = 0;
 
     const loadFrameLayout = async () => {
       try {
@@ -3256,9 +3380,14 @@
     }
 
     const openPanel = () => {
+      if (!isRuntimeAvailable()) {
+        location.reload();
+        return;
+      }
       frameLayout = normalizePanelLayout(frameLayout);
       frameShell.classList.add("is-open");
       fabButton.classList.add("is-hidden");
+      showFrameLoading();
       applyFrameLayout(false);
       frame.focus();
       frame.contentWindow?.focus();
@@ -3267,9 +3396,33 @@
       document.documentElement.classList.remove("alc-page-split-active");
       frameShell.classList.remove("is-open");
       fabButton.classList.remove("is-hidden");
+      clearTimeout(frameReadyTimer);
     };
 
-    fabButton.addEventListener("click", openPanel);
+    const openPanelFromEvent = (event) => {
+      event?.preventDefault?.();
+      openPanel();
+    };
+    fabButton.addEventListener("click", openPanelFromEvent);
+    fabButton.addEventListener("pointerup", (event) => {
+      if (event.button !== 0 || frameShell.classList.contains("is-open")) return;
+      openPanelFromEvent(event);
+    });
+    fabButton.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      openPanelFromEvent(event);
+    });
+    frameFallback.querySelector("button")?.addEventListener("click", () => {
+      location.reload();
+    });
+    frame.addEventListener("load", () => {
+      if (!frameShell.classList.contains("is-open") || frameReady) return;
+      showFrameLoading();
+      setTimeout(() => {
+        if (frameReady || !frameShell.classList.contains("is-open")) return;
+        markFrameReady();
+      }, 450);
+    });
     frameResizeEdge.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       startFramePointerGesture(event, "resize", {
@@ -3293,6 +3446,9 @@
     });
     window.addEventListener("message", (event) => {
       if (event.source !== frame.contentWindow) return;
+      if (event.data?.type === "alc-panel-ready") {
+        markFrameReady();
+      }
       if (event.data?.type === "alc-close-panel") closePanel();
       if (event.data?.type === "alc-request-layout") postFrameLayout();
       if (event.data?.type === "alc-toggle-layout") {
@@ -3329,6 +3485,7 @@
         endFrameGesture(event.data.screenX, event.data.screenY);
       }
     });
+    frame.src = frameSrc;
 
     function applyFrameLayout(shouldSave) {
       frameLayout = normalizePanelLayout(frameLayout);
@@ -3362,6 +3519,32 @@
       } catch {
         // The iframe may still be loading.
       }
+    }
+
+    function showFrameLoading() {
+      if (frameReady) {
+        markFrameReady();
+        return;
+      }
+      clearTimeout(frameReadyTimer);
+      frameShell.classList.add("is-loading");
+      frameShell.classList.remove("is-ready", "is-load-error");
+      frameReadyTimer = setTimeout(() => {
+        if (frameReady || !frameShell.classList.contains("is-open")) return;
+        frameShell.classList.remove("is-loading");
+        frameShell.classList.add("is-load-error");
+        const strong = frameFallback.querySelector("strong");
+        const span = frameFallback.querySelector("span");
+        if (strong) strong.textContent = "arXivMate 面板没有成功加载";
+        if (span) span.textContent = "通常是扩展刚更新后当前 PDF 页还没刷新。刷新页面后会重新注入最新脚本。";
+      }, 3500);
+    }
+
+    function markFrameReady() {
+      frameReady = true;
+      clearTimeout(frameReadyTimer);
+      frameShell.classList.remove("is-loading", "is-load-error");
+      frameShell.classList.add("is-ready");
     }
 
     function startFrameGesture(kind, data) {
@@ -3437,7 +3620,7 @@
   }
 })();
 
-function installStandaloneSplitStyles() {
+function installPageSplitStyles() {
   if (document.getElementById("arxiv-llm-companion-page-style")) return;
   const node = document.createElement("style");
   node.id = "arxiv-llm-companion-page-style";
@@ -3537,6 +3720,10 @@ function resolveFrameAppearance(value) {
 }
 
 function readEmbeddedPanelPaper() {
+  if (window.ArxivMateEmbeddedPanelPaper && typeof window.ArxivMateEmbeddedPanelPaper === "object") {
+    return window.ArxivMateEmbeddedPanelPaper;
+  }
+  if (window.ArxivMateEmbeddedPanelMode) return null;
   if (typeof chrome === "undefined" || !chrome.runtime?.id) return null;
   const panelUrl = runtimeUrl("panel.html");
   if (!panelUrl || !location.href.startsWith(panelUrl)) return null;

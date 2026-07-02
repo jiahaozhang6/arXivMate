@@ -11,6 +11,7 @@
   --alc-accent: #156f8f;
   --alc-accent-strong: #0f536b;
   --alc-accent-soft: #eef7fa;
+  --alc-accent-line: rgba(21, 111, 143, 0.24);
   --alc-focus: rgba(21, 111, 143, 0.2);
   --alc-warn: #a33b20;
   --alc-user: #e9f6fa;
@@ -20,6 +21,7 @@
   --alc-fab-shadow: 0 12px 28px rgba(15, 83, 107, 0.26);
   --alc-panel-shadow: -8px 0 24px rgba(31, 35, 40, 0.16);
   --alc-bubble-shadow: 0 3px 10px rgba(32, 36, 42, 0.04);
+  --alc-soft-shadow: 0 3px 10px rgba(32, 36, 42, 0.04);
   --alc-spinner-track: rgba(21, 111, 143, 0.22);
   --alc-quote-line: rgba(21, 111, 143, 0.35);
   --alc-shortcut-border: rgba(21, 111, 143, 0.24);
@@ -40,6 +42,7 @@
   --alc-accent: #59aecd;
   --alc-accent-strong: #8bcfe4;
   --alc-accent-soft: #173845;
+  --alc-accent-line: rgba(89, 174, 205, 0.28);
   --alc-focus: rgba(89, 174, 205, 0.3);
   --alc-warn: #ff9b7e;
   --alc-user: #133443;
@@ -48,6 +51,7 @@
   --alc-fab-shadow: 0 12px 28px rgba(6, 15, 21, 0.45);
   --alc-panel-shadow: -8px 0 24px rgba(0, 0, 0, 0.32);
   --alc-bubble-shadow: 0 3px 10px rgba(0, 0, 0, 0.16);
+  --alc-soft-shadow: 0 3px 10px rgba(0, 0, 0, 0.16);
   --alc-spinner-track: rgba(89, 174, 205, 0.24);
   --alc-quote-line: rgba(89, 174, 205, 0.42);
   --alc-shortcut-border: rgba(89, 174, 205, 0.3);
@@ -67,6 +71,7 @@
   --alc-accent: #3f7d7d;
   --alc-accent-strong: #235d60;
   --alc-accent-soft: #e6f0ec;
+  --alc-accent-line: rgba(63, 125, 125, 0.28);
   --alc-focus: rgba(63, 125, 125, 0.22);
   --alc-warn: #a3482b;
   --alc-user: #e7f2eb;
@@ -75,6 +80,7 @@
   --alc-fab-shadow: 0 12px 28px rgba(35, 93, 96, 0.22);
   --alc-panel-shadow: -8px 0 24px rgba(70, 58, 42, 0.15);
   --alc-bubble-shadow: 0 3px 10px rgba(70, 58, 42, 0.06);
+  --alc-soft-shadow: 0 3px 10px rgba(70, 58, 42, 0.06);
   --alc-spinner-track: rgba(63, 125, 125, 0.24);
   --alc-quote-line: rgba(63, 125, 125, 0.38);
   --alc-shortcut-border: rgba(63, 125, 125, 0.26);
@@ -100,6 +106,9 @@
   font-size: 15px;
   box-shadow: var(--alc-fab-shadow);
   cursor: pointer;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
 }
 
 .alc-fab:hover {
@@ -319,6 +328,12 @@
   min-width: 140px;
   display: grid;
   gap: 3px;
+  position: relative;
+  z-index: 4;
+}
+
+.alc-model-picker.is-menu-open {
+  z-index: 30;
 }
 
 .alc-model-picker span {
@@ -351,7 +366,7 @@
 }
 
 .alc-shortcuts button,
-.alc-tools button,
+.alc-tools > button,
 .alc-toggle {
   flex: 0 0 auto;
   min-height: 28px;
@@ -366,7 +381,7 @@
 }
 
 .alc-shortcuts button,
-.alc-tools button {
+.alc-tools > button {
   padding: 0 10px;
 }
 
@@ -377,7 +392,7 @@
 }
 
 .alc-shortcuts button:hover,
-.alc-tools button:hover,
+.alc-tools > button:hover,
 .alc-toggle:hover {
   border-color: var(--alc-accent);
 }
@@ -485,7 +500,7 @@
   align-items: center;
   margin: 0 12px 9px;
   border: 1px solid var(--alc-line);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--alc-control);
   padding: 7px;
 }
@@ -1171,6 +1186,7 @@
 .alc-history-jump button:hover:not(:disabled) {
   border-color: var(--alc-accent);
   color: var(--alc-accent-strong);
+  background: var(--alc-accent-soft);
 }
 
 .alc-send {
@@ -1195,6 +1211,14 @@
   background: var(--alc-warn);
 }
 
+button:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--alc-focus);
+  outline-offset: 2px;
+}
+
 button:disabled,
 textarea:disabled,
 input:disabled,
@@ -1215,6 +1239,12 @@ select:disabled {
   background: var(--alc-panel);
   font-size: 11px;
   line-height: 1.35;
+}
+
+.alc-status:not(:empty) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .alc-status.is-error {
@@ -1247,5 +1277,27 @@ select:disabled {
   .alc-bubble,
   .alc-message-user .alc-bubble {
     max-width: 94%;
+  }
+
+  .alc-chat {
+    padding: 14px 12px;
+  }
+
+  .alc-toolbar,
+  .alc-composer {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .alc-composer {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .alc-history-jump {
+    display: none;
+  }
+
+  .alc-send {
+    min-width: 60px;
   }
 }

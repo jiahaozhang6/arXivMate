@@ -33,6 +33,13 @@ const SETTINGS_MIRROR_KEY = "settingsMirror";
 const MODEL_PROFILES_LOCAL_KEY = "modelProfiles";
 const BACKUP_FORMAT = "arXivMate.localData";
 const BACKUP_VERSION = 1;
+const NATIVE_LOCAL_HOST_NAME = "com.arxivmate.local";
+const MAX_LOCAL_CONFIG_BYTES = 1024 * 1024;
+const DEFAULT_LOCAL_MODEL_CONFIG_PATHS = [
+  "~/.codex/config.toml",
+  "~/.codex/auth.json",
+  "~/.claude/settings.json"
+];
 const WEBCHAT_PDF_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
 const ZOTERO_PDF_ATTACHMENT_MAX_BYTES = 80 * 1024 * 1024;
 const WEBCHAT_BRIDGE_VERSION = 15;
@@ -52,6 +59,10 @@ const PROVIDER_PRESETS = {
   minimax: {
     baseUrl: "https://api.minimaxi.com/v1",
     model: "MiniMax-M3"
+  },
+  anthropic: {
+    baseUrl: "https://api.anthropic.com",
+    model: ""
   },
   ollama: {
     baseUrl: "http://localhost:11434/v1",
@@ -149,8 +160,7 @@ chrome.runtime.onConnect.addListener((port) => {
 function postPort(port, payload) {
   try {
     port.postMessage(payload);
-  } catch (error) {
-    console.debug("stream port closed:", error);
+  } catch {
   }
 }
 
@@ -181,6 +191,8 @@ async function handleMessage(message, sender = {}) {
       return exportLocalData();
     case "importLocalData":
       return importLocalData(message.backup);
+    case "readLocalModelConfigPaths":
+      return readLocalModelConfigPaths(message.paths);
     case "summarizePaper":
       return summarizePaper({
         paper: message.paper,
@@ -198,7 +210,7 @@ async function handleMessage(message, sender = {}) {
     case "zoteroGetTargets":
       return getZoteroTargets();
     case "zoteroSuggestTargets":
-      return suggestZoteroTargets(message.paper, message.targets, message.profileId);
+      return suggestZoteroTargets(message.paper, message.targets, message.profileId, message.selectedTargetId);
     case "zoteroEnsureCookiePermission":
       return ensureZoteroCookiePermission(message.origins);
     case "zoteroSavePaper":
@@ -236,14 +248,141 @@ async function handleMessage(message, sender = {}) {
 
 function createIgnoredMessageResult(message) {
   const type = normalizeString(message?.type);
-  if (type) {
-    console.debug("Ignored unknown runtime message:", type);
-  }
   return {
     ignored: true,
     reason: type ? "unknown-message-type" : "missing-message-type",
     type
   };
+}
+
+async function readLocalModelConfigPaths(paths) {
+  const normalizedPaths = normalizeLocalModelConfigPaths(paths);
+  const nativeResult = await readLocalModelConfigPathsViaNative(normalizedPaths).catch((error) => ({
+    documents: [],
+    errors: [`Native helper：${error.message || String(error)}`],
+    reader: "native"
+  }));
+  const nativeDocuments = Array.isArray(nativeResult.documents) ? nativeResult.documents : [];
+  const nativeErrors = Array.isArray(nativeResult.errors) ? nativeResult.errors : [];
+
+  if (nativeDocuments.length) {
+    return {
+      documents: nativeDocuments,
+      errors: nativeErrors,
+      reader: "native"
+    };
+  }
+
+  const fileResult = await readLocalModelConfigPathsViaFileUrl(normalizedPaths);
+  return {
+    documents: fileResult.documents,
+    errors: [...nativeErrors, ...fileResult.errors],
+    reader: fileResult.documents.length ? "file" : "none"
+  };
+}
+
+function normalizeLocalModelConfigPaths(paths) {
+  const list = Array.isArray(paths) ? paths : [];
+  const normalized = list.map((pathValue) => normalizeString(pathValue)).filter(Boolean);
+  return [...new Set(normalized.length ? normalized : DEFAULT_LOCAL_MODEL_CONFIG_PATHS)];
+}
+
+function readLocalModelConfigPathsViaNative(paths) {
+  if (!chrome.runtime?.sendNativeMessage) {
+    return Promise.reject(new Error("当前浏览器不支持 native messaging。"));
+  }
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendNativeMessage(
+      NATIVE_LOCAL_HOST_NAME,
+      {
+        type: "readLocalModelConfigPaths",
+        paths
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (!response || response.ok === false) {
+          reject(new Error(response?.error || "native helper 未返回有效结果。"));
+          return;
+        }
+        resolve({
+          documents: sanitizeLocalConfigDocuments(response.documents),
+          errors: Array.isArray(response.errors) ? response.errors.map(normalizeString).filter(Boolean) : []
+        });
+      }
+    );
+  });
+}
+
+async function readLocalModelConfigPathsViaFileUrl(paths) {
+  const documents = [];
+  const errors = [];
+  for (const pathValue of paths) {
+    try {
+      documents.push(await fetchLocalConfigPathViaFileUrl(pathValue));
+    } catch (error) {
+      errors.push(`${pathValue}: ${error.message || String(error)}`);
+    }
+  }
+  return { documents: sanitizeLocalConfigDocuments(documents), errors };
+}
+
+async function fetchLocalConfigPathViaFileUrl(pathValue) {
+  const url = localPathToFileUrl(pathValue);
+  if (!url) {
+    throw new Error("不是可直接读取的绝对路径；~ 路径需要 native helper。");
+  }
+  const response = await fetch(url, {
+    method: "GET",
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  const text = await response.text();
+  if (text.length > MAX_LOCAL_CONFIG_BYTES) {
+    throw new Error("配置文件过大，已拒绝读取。");
+  }
+  return {
+    name: basenameFromLocalPath(pathValue),
+    path: pathValue,
+    text,
+    reader: "file"
+  };
+}
+
+function localPathToFileUrl(pathValue) {
+  const value = normalizeString(pathValue);
+  if (!value || /^~(?:[/\\]|$)/.test(value) || /%[A-Za-z0-9_]+%|\$(?:\{[A-Za-z0-9_]+\}|[A-Za-z0-9_]+)/.test(value)) {
+    return "";
+  }
+  if (/^file:\/\//i.test(value)) return value;
+  const normalized = value.replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(normalized)) {
+    const drive = normalized.slice(0, 2);
+    const rest = normalized.slice(2).split("/").filter(Boolean).map(encodeURIComponent).join("/");
+    return `file:///${drive}/${rest}`;
+  }
+  if (normalized.startsWith("/")) {
+    return `file://${normalized.split("/").map((part, index) => index ? encodeURIComponent(part) : "").join("/")}`;
+  }
+  return "";
+}
+
+function basenameFromLocalPath(pathValue) {
+  const clean = normalizeString(pathValue).replace(/^file:\/+/, "").split(/[?#]/)[0];
+  return clean.split(/[\\/]/).filter(Boolean).pop() || "config";
+}
+
+function sanitizeLocalConfigDocuments(documents) {
+  return (Array.isArray(documents) ? documents : []).map((document) => ({
+    name: normalizeString(document.name || basenameFromLocalPath(document.path)),
+    path: normalizeString(document.path),
+    text: String(document.text || "").slice(0, MAX_LOCAL_CONFIG_BYTES),
+    reader: normalizeString(document.reader)
+  })).filter((document) => document.name && document.text);
 }
 
 async function probePdfUrl(url) {
@@ -504,6 +643,7 @@ async function saveSettings(settings) {
     ...DEFAULT_SETTINGS,
     language: normalizeLanguage(settings?.language),
     appearance: normalizeAppearance(settings?.appearance),
+    localModelConfigPaths: normalizeLocalModelConfigPaths(settings?.localModelConfigPaths),
     modelProfiles
   };
 
@@ -679,11 +819,11 @@ async function notifyPaperTabsSettingsChanged(settings) {
           settings
         });
       } catch {
-        chrome.tabs.reload(tab.id).catch(() => {});
+        // Do not reload reading tabs on settings save; pages without the content
+        // script will pick up changes the next time the user opens arXivMate.
       }
     }
-  } catch (error) {
-    console.debug("arXivMate settings refresh notification failed:", error);
+  } catch {
   }
 }
 
@@ -727,10 +867,13 @@ async function listModelsForProfile(profile) {
     };
   }
   if (!normalized?.baseUrl) throw new Error("请先填写 API Base URL。");
-  const endpoint = buildModelsEndpoint(normalized.baseUrl);
+  const isAnthropic = isAnthropicProvider(normalized);
+  const endpoint = isAnthropic
+    ? buildAnthropicModelsEndpoint(normalized.baseUrl)
+    : buildModelsEndpoint(normalized.baseUrl);
   const response = await fetch(endpoint, {
     method: "GET",
-    headers: buildRequestHeaders(normalized),
+    headers: isAnthropic ? buildAnthropicRequestHeaders(normalized) : buildRequestHeaders(normalized),
     cache: "no-store"
   });
   const raw = await response.text();
@@ -742,10 +885,16 @@ async function listModelsForProfile(profile) {
   }
   if (!response.ok) {
     const detail = payload?.error?.message || payload?.message || raw || `${response.status} ${response.statusText}`;
+    if (isAnthropic && normalized.model) {
+      return createCurrentModelListFallback(normalized, "该 Anthropic-compatible 接口不提供模型列表，已保留当前模型名称。");
+    }
     throw new Error(`模型列表加载失败：${detail}`);
   }
   const models = extractModelIds(payload);
   if (!models.length) {
+    if (isAnthropic && normalized.model) {
+      return createCurrentModelListFallback(normalized, "该 Anthropic-compatible 接口没有返回可识别的模型列表，已保留当前模型名称。");
+    }
     throw new Error("接口没有返回可识别的模型列表，请手动填写模型名称。");
   }
   return {
@@ -755,21 +904,31 @@ async function listModelsForProfile(profile) {
   };
 }
 
+function createCurrentModelListFallback(profile, warning) {
+  return {
+    profileId: profile.id,
+    baseUrl: profile.baseUrl,
+    models: [profile.model],
+    warning
+  };
+}
+
 async function getZoteroTargets() {
   await callZoteroConnector("ping", {});
   const payload = await callZoteroConnector("getSelectedCollection", { switchToReadableLibrary: true });
   return ArxivMateZotero.normalizeTargetsPayload(payload);
 }
 
-async function suggestZoteroTargets(paper, targets, profileId = "") {
+async function suggestZoteroTargets(paper, targets, profileId = "", selectedTargetId = "") {
   const normalizedTargets = Array.isArray(targets) ? targets : [];
   if (!normalizedTargets.length) throw new Error("没有读取到 Zotero 分类，无法推荐。");
+  const normalizedPaper = normalizePaper(paper);
   const baseSettings = await getSettings();
   const settings = resolveRequestSettings(baseSettings, profileId);
   if (isWebChatProvider(settings.provider)) {
     throw new Error("AI 推荐分类需要使用 API 模型；WebChat 模型不适合在后台静默请求。");
   }
-  const prompt = ArxivMateZotero.buildSuggestionPrompt(normalizePaper(paper), normalizedTargets);
+  const prompt = ArxivMateZotero.buildSuggestionPrompt(normalizedPaper, normalizedTargets);
   const text = await callChatCompletions({
     ...settings,
     temperature: 0.1,
@@ -784,38 +943,17 @@ async function suggestZoteroTargets(paper, targets, profileId = "") {
       content: prompt
     }
   ]);
+  const suggestions = parseZoteroSuggestions(text, normalizedTargets);
   return {
-    suggestions: parseZoteroSuggestions(text, normalizedTargets),
+    suggestions: suggestions.length ? suggestions : ArxivMateZotero.createSuggestionFallback(normalizedPaper, normalizedTargets, {
+      selectedTargetId
+    }),
     raw: text
   };
 }
 
 function parseZoteroSuggestions(text, targets) {
-  const targetMap = new Map(targets.map((target) => [target.id, target]));
-  const raw = normalizeTextBlock(text);
-  let payload = null;
-  const jsonText = raw.match(/```json\s*([\s\S]*?)```/i)?.[1] || raw.match(/\{[\s\S]*\}/)?.[0] || raw;
-  try {
-    payload = JSON.parse(jsonText);
-  } catch {
-    payload = null;
-  }
-  const rows = Array.isArray(payload?.suggestions) ? payload.suggestions : [];
-  return rows
-    .map((row) => {
-      const targetId = normalizeString(row.targetId || row.id);
-      const target = targetMap.get(targetId);
-      if (!target || targetId.startsWith("L")) return null;
-      return {
-        targetId,
-        name: target.name,
-        path: ArxivMateZotero.formatZoteroTargetPath(targets, targetId),
-        reason: normalizeString(row.reason).slice(0, 240),
-        confidence: Math.max(0, Math.min(1, Number(row.confidence) || 0))
-      };
-    })
-    .filter(Boolean)
-    .slice(0, 3);
+  return ArxivMateZotero.parseSuggestionResponse(text, targets);
 }
 
 async function ensureZoteroCookiePermission(origins = []) {
@@ -1304,6 +1442,15 @@ async function ensureWebChatStatusTab(config) {
 }
 
 async function callChatCompletions(settings, messages) {
+  if (isAnthropicProvider(settings)) {
+    const body = buildAnthropicMessagesRequestBody(settings, messages, false);
+    const payload = await fetchAnthropicMessagesPayload(settings, body);
+    const content = extractAnthropicAssistantContent(payload, settings);
+    if (!content) {
+      throw new Error("LLM 返回为空，可能是模型名、接口格式或 API key 不匹配。");
+    }
+    return cleanModelOutput(content, settings);
+  }
   const body = buildChatRequestBody(settings, messages, false);
   const payload = await fetchChatCompletionsPayload(settings, body);
   const content = extractAssistantContent(payload, settings);
@@ -1314,6 +1461,16 @@ async function callChatCompletions(settings, messages) {
 }
 
 async function callChatCompletionsStream(settings, messages, onDelta, signal) {
+  if (isAnthropicProvider(settings)) {
+    const body = buildAnthropicMessagesRequestBody(settings, messages, true);
+    const response = await fetchAnthropicMessagesStreamResponse(settings, body, signal);
+    if (response.body) return parseAnthropicMessagesStream(response.body, onDelta, settings);
+    const content = extractAnthropicAssistantContent(response.payload, settings);
+    if (!content) throw new Error("LLM 返回为空，可能是模型名、接口格式或 API key 不匹配。");
+    const cleaned = cleanModelOutput(content, settings);
+    if (cleaned) onDelta(cleaned);
+    return cleaned;
+  }
   const body = buildChatRequestBody(settings, messages, true);
   const response = await fetchChatCompletionsStreamResponse(settings, body, signal);
   if (response.body) return parseChatCompletionsStream(response.body, onDelta, settings);
@@ -1795,6 +1952,51 @@ function stripWebChatFullTextBlocks(content) {
     .trim();
 }
 
+async function fetchAnthropicMessagesPayload(settings, body) {
+  const endpoint = buildAnthropicMessagesEndpoint(settings.baseUrl);
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: buildAnthropicRequestHeaders(settings),
+    body: JSON.stringify(body)
+  });
+  const payload = await parseResponsePayload(response);
+  if (!response.ok) {
+    throw new Error(`LLM 请求失败：${getResponseErrorDetail(response, payload)}`);
+  }
+  return payload;
+}
+
+async function fetchAnthropicMessagesStreamResponse(settings, body, signal) {
+  const endpoint = buildAnthropicMessagesEndpoint(settings.baseUrl);
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: buildAnthropicRequestHeaders(settings),
+    body: JSON.stringify(body),
+    signal
+  });
+  if (!response.ok) {
+    const payload = await parseResponsePayload(response);
+    const detail = getResponseErrorDetail(response, payload);
+    if (isStreamUnsupportedError(response.status, detail)) {
+      return {
+        body: null,
+        payload: await fetchAnthropicMessagesPayload(settings, { ...body, stream: false })
+      };
+    }
+    throw new Error(`LLM 请求失败：${detail}`);
+  }
+  if (!response.body) {
+    return {
+      body: null,
+      payload: await parseResponsePayload(response)
+    };
+  }
+  return {
+    body: response.body,
+    payload: null
+  };
+}
+
 async function fetchChatCompletionsPayload(settings, body, retryCount = 0) {
   const endpoint = buildChatEndpoint(settings.baseUrl);
   const response = await fetch(endpoint, {
@@ -1888,6 +2090,17 @@ function buildRequestHeaders(settings) {
   return headers;
 }
 
+function buildAnthropicRequestHeaders(settings) {
+  const headers = {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01"
+  };
+  if (settings.apiKey) {
+    headers["x-api-key"] = settings.apiKey;
+  }
+  return headers;
+}
+
 function buildChatRequestBody(settings, messages, stream) {
   const body = {
     model: settings.model,
@@ -1900,6 +2113,52 @@ function buildChatRequestBody(settings, messages, stream) {
     body.temperature = settings.temperature;
   }
   return body;
+}
+
+function buildAnthropicMessagesRequestBody(settings, messages, stream) {
+  const system = [];
+  const anthropicMessages = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const role = normalizeString(message?.role).toLowerCase();
+    const content = normalizeModelContent(message?.content);
+    if (!content) continue;
+    if (role === "system") {
+      system.push(content);
+      continue;
+    }
+    appendAnthropicMessage(anthropicMessages, role === "assistant" ? "assistant" : "user", content);
+  }
+  if (!anthropicMessages.length) {
+    appendAnthropicMessage(anthropicMessages, "user", "Reply with OK only.");
+  }
+
+  const body = {
+    model: settings.model,
+    max_tokens: normalizeAnthropicMaxTokens(settings.maxOutputTokens),
+    messages: anthropicMessages,
+    stream
+  };
+  if (system.length) body.system = system.join("\n\n");
+  const temperature = Number(settings.temperature);
+  if (Number.isFinite(temperature)) {
+    body.temperature = Math.min(1, Math.max(0, temperature));
+  }
+  return body;
+}
+
+function appendAnthropicMessage(messages, role, content) {
+  const last = messages[messages.length - 1];
+  if (last && last.role === role) {
+    last.content = `${last.content}\n\n${content}`;
+    return;
+  }
+  messages.push({ role, content });
+}
+
+function normalizeAnthropicMaxTokens(value) {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 1) return 1024;
+  return Math.min(parsed, 64000);
 }
 
 function shouldOmitTemperature(settings) {
@@ -1962,6 +2221,46 @@ async function parseChatCompletionsStream(body, onDelta, settings = {}) {
   return cleanModelOutput(answer, settings);
 }
 
+async function parseAnthropicMessagesStream(body, onDelta, settings = {}) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  const stripThinking = shouldStripThinkingOutput(settings);
+  const state = createThinkingStripState();
+  let buffer = "";
+  let answer = "";
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const delta = parseAnthropicStreamLineDelta(line, settings);
+        if (!delta) continue;
+        const cleanDelta = stripThinking ? stripThinkingChunk(delta, state) : delta;
+        if (!cleanDelta) continue;
+        answer += cleanDelta;
+        onDelta(cleanDelta);
+      }
+    }
+
+    if (buffer.trim()) {
+      const delta = parseAnthropicStreamLineDelta(buffer, settings);
+      const cleanDelta = stripThinking ? stripThinkingChunk(delta, state) : delta;
+      if (cleanDelta) {
+        answer += cleanDelta;
+        onDelta(cleanDelta);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return cleanModelOutput(answer, settings);
+}
+
 function parseStreamLineDelta(line, settings = {}) {
   const trimmed = String(line || "").trim();
   if (!trimmed) return "";
@@ -1993,6 +2292,37 @@ function parseStreamLineDelta(line, settings = {}) {
   ]);
 }
 
+function parseAnthropicStreamLineDelta(line, settings = {}) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed || !trimmed.startsWith("data:")) return "";
+  const data = trimmed.slice(5).trim();
+  if (!data || data === "[DONE]") return "";
+  let payload;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    return "";
+  }
+  const includeThinking = normalizeThinkingMode(settings?.thinkingMode) === "show";
+  if (payload?.type === "content_block_delta") {
+    return firstModelContent([
+      payload?.delta?.text,
+      ...(includeThinking ? [
+        payload?.delta?.thinking,
+        payload?.delta?.reasoning
+      ] : [])
+    ]);
+  }
+  if (payload?.type === "content_block_start") {
+    const block = payload?.content_block;
+    if (block?.type === "text") return normalizeModelContent(block.text);
+    if (includeThinking && /thinking|reasoning/i.test(block?.type || "")) {
+      return normalizeModelContent(block.thinking || block.text);
+    }
+  }
+  return "";
+}
+
 function extractAssistantContent(payload, settings = {}) {
   const includeThinking = normalizeThinkingMode(settings?.thinkingMode) === "show";
   const message = payload?.choices?.[0]?.message;
@@ -2005,6 +2335,25 @@ function extractAssistantContent(payload, settings = {}) {
       message?.thought
     ] : []),
     payload?.choices?.[0]?.text,
+    payload?.message?.content,
+    payload?.text,
+    payload?.raw
+  ]);
+}
+
+function extractAnthropicAssistantContent(payload, settings = {}) {
+  const includeThinking = normalizeThinkingMode(settings?.thinkingMode) === "show";
+  const content = Array.isArray(payload?.content) ? payload.content : [];
+  const blocks = content.map((block) => {
+    if (!block || typeof block !== "object") return "";
+    if (block.type === "text") return block.text;
+    if (includeThinking && /thinking|reasoning/i.test(block.type || "")) {
+      return block.thinking || block.text || "";
+    }
+    return "";
+  });
+  return firstModelContent([
+    blocks,
     payload?.message?.content,
     payload?.text,
     payload?.raw
@@ -2206,6 +2555,14 @@ function buildChatEndpoint(baseUrl) {
   return `${trimmed}/chat/completions`;
 }
 
+function buildAnthropicMessagesEndpoint(baseUrl) {
+  const trimmed = normalizeAnthropicCompatibleBase(baseUrl);
+  if (/\/v1\/messages$/i.test(trimmed)) return trimmed;
+  if (/\/messages$/i.test(trimmed)) return trimmed;
+  if (/\/v1$/i.test(trimmed)) return `${trimmed}/messages`;
+  return `${trimmed}/v1/messages`;
+}
+
 function buildModelsEndpoint(baseUrl) {
   const trimmed = normalizeOpenAICompatibleBase(baseUrl);
   if (/\/models$/i.test(trimmed)) return trimmed;
@@ -2213,6 +2570,14 @@ function buildModelsEndpoint(baseUrl) {
     return trimmed.replace(/\/chat\/completions$/i, "/models");
   }
   return `${trimmed}/models`;
+}
+
+function buildAnthropicModelsEndpoint(baseUrl) {
+  const trimmed = normalizeAnthropicCompatibleBase(baseUrl);
+  if (/\/v1\/models$/i.test(trimmed)) return trimmed;
+  if (/\/models$/i.test(trimmed)) return trimmed;
+  if (/\/v1$/i.test(trimmed)) return `${trimmed}/models`;
+  return `${trimmed}/v1/models`;
 }
 
 function normalizeOpenAICompatibleBase(baseUrl) {
@@ -2231,6 +2596,10 @@ function normalizeOpenAICompatibleBase(baseUrl) {
     return `${origin}/v1`;
   }
   return trimmed;
+}
+
+function normalizeAnthropicCompatibleBase(baseUrl) {
+  return normalizeString(baseUrl).replace(/\/+$/, "");
 }
 
 function buildOutputTokenParam(model, maxOutputTokens) {
@@ -3045,6 +3414,7 @@ function normalizeWebChatPdf(value) {
 function createDefaultSettings() {
   return {
     ...DEFAULT_SETTINGS,
+    localModelConfigPaths: normalizeLocalModelConfigPaths(),
     modelProfiles: []
   };
 }
@@ -3055,6 +3425,7 @@ function normalizeSettings(settings) {
     ...DEFAULT_SETTINGS,
     language: normalizeLanguage(settings?.language),
     appearance: normalizeAppearance(settings?.appearance),
+    localModelConfigPaths: normalizeLocalModelConfigPaths(settings?.localModelConfigPaths),
     modelProfiles
   };
 }
@@ -3132,10 +3503,9 @@ function normalizeModelProfiles(value, legacySettings = {}) {
 
 function normalizeModelProfile(profile) {
   if (!profile || typeof profile !== "object") return null;
+  const explicitProvider = normalizeProvider(profile.provider);
   const inferredProvider = inferProviderFromBaseUrl(profile.baseUrl);
-  const provider = inferredProvider !== "custom"
-    ? inferredProvider
-    : normalizeProvider(profile.provider);
+  const provider = explicitProvider !== "custom" ? explicitProvider : inferredProvider;
   const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
   const model = normalizeString(profile.model) || preset.model;
   const baseUrl = normalizeString(profile.baseUrl) || preset.baseUrl;
@@ -3390,6 +3760,7 @@ function createProfileId() {
 function providerLabel(provider) {
   if (provider === "deepseek") return "DeepSeek";
   if (provider === "minimax") return "MiniMax";
+  if (provider === "anthropic") return "Claude";
   if (provider === "ollama") return "Ollama";
   if (provider === "openai") return "OpenAI";
   if (provider === "webchatChatGPT") return "ChatGPT Web";
@@ -3427,6 +3798,7 @@ function inferProviderFromBaseUrl(baseUrl) {
   if (normalized === "webchat://chatgpt") return "webchatChatGPT";
   if (normalized === "webchat://deepseek") return "webchatDeepSeek";
   const host = extractProviderHost(normalized);
+  if (host.includes("anthropic") || /\/anthropic(?:\/|$)/.test(normalized)) return "anthropic";
   if (host.includes("minimax") || host.includes("minimaxi")) return "minimax";
   if (host.includes("deepseek")) return "deepseek";
   if (host.includes("openai")) return "openai";
@@ -3451,6 +3823,10 @@ function extractProviderHost(baseUrl) {
 
 function isWebChatProvider(provider) {
   return Object.prototype.hasOwnProperty.call(WEBCHAT_PROVIDERS, provider);
+}
+
+function isAnthropicProvider(settings) {
+  return normalizeProvider(settings?.provider) === "anthropic";
 }
 
 function getWebChatConfig(provider) {
