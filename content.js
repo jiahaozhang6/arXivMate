@@ -671,7 +671,8 @@
   async function runTurn(mode) {
     if (isGenerating) return;
     await refreshSettings({ silent: true });
-    if (!getSelectedProfile()) {
+    const selectedProfile = getSelectedProfile();
+    if (!selectedProfile) {
       setStatus(t("noModelSelected"), true);
       renderModelSelect();
       return;
@@ -686,7 +687,7 @@
     const contextMode = resolveTurnContextMode(mode);
     historyJumpIndex = -1;
     setBusy(true);
-    setStatus(contextMode === "full" ? t("preparingFull") : t("preparingFast"));
+    setStatus(withWebChatLoginReminder(contextMode === "full" ? t("preparingFull") : t("preparingFast"), selectedProfile));
     const preview = appendPreviewTurn(userText);
     let latestStreamMeta = null;
     if (mode === "ask") {
@@ -824,34 +825,39 @@
   }
 
   async function attachWebChatPdfPayload(payload) {
-    const pdfUrl = clean(payload.pdfUrl) || getCurrentPdfUrl() || (isPdfLikeUrl(location.href) ? location.href : "");
-    if (!pdfUrl || !/^https?:\/\//i.test(pdfUrl)) return;
+    const pdfUrl = getWebChatPdfCandidateUrl(payload);
     const filename = buildPdfUploadFilename(payload);
     const attempts = [];
-    try {
-      setStatus(`${t("preparingFull")} · 正在准备 PDF 文件上传到 WebChat`);
-      const result = await sendMessage({
-        type: "fetchPdfAsBase64",
-        url: pdfUrl,
-        filename
-      });
-      if (result?.base64) {
-        applyWebChatPdfPayload(payload, result, "PDF 文件已准备上传");
-        return;
+    if (canFetchPdfBytesInPage(pdfUrl)) {
+      try {
+        setStatus(`${t("preparingFull")} · 正在准备 PDF 文件上传到 WebChat`);
+        const result = await sendMessage({
+          type: "fetchPdfAsBase64",
+          url: pdfUrl,
+          filename
+        });
+        if (result?.base64) {
+          applyWebChatPdfPayload(payload, result, "PDF 文件已准备上传");
+          return;
+        }
+      } catch (error) {
+        attempts.push(`后台下载失败：${error?.message || String(error)}`);
       }
-    } catch (error) {
-      attempts.push(`后台下载失败：${error?.message || String(error)}`);
+    } else {
+      attempts.push(`原始 PDF 地址不是可直接下载的 HTTP(S) 地址：${pdfUrl || "空"}`);
     }
 
-    try {
-      setStatus(`${t("preparingFull")} · 后台下载受限，改用当前页面会话准备 PDF`);
-      const result = await fetchPdfAsBase64InPage(pdfUrl, filename);
-      if (result?.base64) {
-        applyWebChatPdfPayload(payload, result, "PDF 文件已准备上传（页面会话下载）");
-        return;
+    if (canFetchPdfBytesInPage(pdfUrl)) {
+      try {
+        setStatus(`${t("preparingFull")} · 后台下载受限，改用当前页面会话准备 PDF`);
+        const result = await fetchPdfAsBase64InPage(pdfUrl, filename);
+        if (result?.base64) {
+          applyWebChatPdfPayload(payload, result, "PDF 文件已准备上传（页面会话下载）");
+          return;
+        }
+      } catch (error) {
+        attempts.push(`页面会话下载失败：${error?.message || String(error)}`);
       }
-    } catch (error) {
-      attempts.push(`页面会话下载失败：${error?.message || String(error)}`);
     }
 
     try {
@@ -873,10 +879,24 @@
   }
 
   function applyWebChatPdfPayload(payload, result, sourceLabel) {
-    payload.webchatPdf = result;
+    payload.webchatPdf = {
+      ...result,
+      source: result.source || sourceLabel
+    };
     payload.contextSource = payload.contextSource
       ? `${payload.contextSource} + ${sourceLabel}`
       : sourceLabel;
+  }
+
+  function getWebChatPdfCandidateUrl(payload) {
+    return clean(payload?.pdfUrl) ||
+      getCurrentPdfUrl() ||
+      clean(payload?.pageUrl) ||
+      clean(location.href);
+  }
+
+  function canFetchPdfBytesInPage(pdfUrl) {
+    return /^https?:\/\//i.test(clean(pdfUrl));
   }
 
   async function fetchPdfAsBase64InPage(pdfUrl, requestedFilename = "") {
@@ -937,10 +957,7 @@
     } catch (error) {
       attempts.push(`页面正文抽取失败：${formatPdfExtractionError(error)}`);
     }
-    const text = buildFallbackPdfText(payload, extraction?.text || "", extraction?.source || "");
-    if (text.length < 400) {
-      throw new Error("没有足够的页面正文或元数据可生成 WebChat 附件。");
-    }
+    const text = buildFallbackPdfText(payload, extraction?.text || "", extraction?.source || "", attempts);
     const generated = createTextPdfBase64(payload.title || payload.id || "Paper context", text);
     return {
       base64: generated.base64,
@@ -953,7 +970,7 @@
     };
   }
 
-  function buildFallbackPdfText(payload, extractedText = "", source = "") {
+  function buildFallbackPdfText(payload, extractedText = "", source = "", attempts = []) {
     const metadata = [
       `Title: ${clean(payload.title) || "Unknown"}`,
       `Document ID: ${clean(payload.id) || "Unknown"}`,
@@ -971,9 +988,11 @@
       : "";
     const body = normalizeTextBlock(extractedText);
     return normalizeTextBlock([
-      "arXivMate generated this PDF because the publisher blocked direct original-PDF download from the extension background.",
+      "arXivMate generated this PDF because the original PDF source was unavailable for direct upload.",
+      "PDF source was unavailable for direct upload. This context PDF is generated from readable page text, PDF viewer text, metadata, and preparation diagnostics.",
       "Use this attached file as the readable paper context for the current question.",
       metadata,
+      attempts.length ? `Preparation diagnostics\n${attempts.filter(Boolean).join("\n")}` : "",
       abstract,
       body ? `Extracted text\n${body}` : ""
     ].filter(Boolean).join("\n\n")).slice(0, Math.max(12000, Number(getSelectedProfile()?.maxContextChars || currentSettings?.maxContextChars || 14000) * 4));
@@ -1861,7 +1880,10 @@
     selectedProfileId = nextProfileId;
     selectedModelLabel = buildSelectedModelLabel();
     renderModelSelect();
-    setStatus(t("modelSelected", { model: selectedProfileDisplayName() }));
+    const profile = getSelectedProfile();
+    setStatus(isWebChatProfile(profile)
+      ? webChatLoginReminderText(profile)
+      : t("modelSelected", { model: selectedProfileDisplayName() }));
   }
 
   function reconcileSelectedProfile() {
@@ -1895,6 +1917,18 @@
     return profile?.name || profile?.model || "";
   }
 
+  function webChatLoginReminderText(profile = getSelectedProfile()) {
+    if (!isWebChatProfile(profile)) return "";
+    return t("webchatLoginReminder", {
+      model: profile?.name || profile?.model || selectedProfileDisplayName() || "WebChat"
+    });
+  }
+
+  function withWebChatLoginReminder(text, profile = getSelectedProfile()) {
+    const reminder = webChatLoginReminderText(profile);
+    return reminder ? `${text} ${reminder}` : text;
+  }
+
   function formatProfileOption(profile) {
     const name = profile.name || profile.model || t("untitledProfile");
     const model = profile.model && profile.model !== name ? ` · ${profile.model}` : "";
@@ -1907,9 +1941,9 @@
       renderConversation(currentConversation);
       if (currentConversation?.messageCount) {
         currentResult = findLastAssistantText(currentConversation);
-        setStatus(t("loadedHistory", { count: currentConversation.turnCount || 0, model: selectedModelLabel }));
+        setStatus(withWebChatLoginReminder(t("loadedHistory", { count: currentConversation.turnCount || 0, model: selectedModelLabel })));
       } else {
-        setStatus(t("defaultModeHint", { model: selectedModelLabel }));
+        setStatus(withWebChatLoginReminder(t("defaultModeHint", { model: selectedModelLabel })));
       }
     } catch (error) {
       setStatus(error.message || String(error), true);
@@ -2259,6 +2293,10 @@
       prompt_applying: "webchatPromptApplying",
       prompt_applied: "webchatPromptApplied",
       prompt_before_pdf: "webchatPromptBeforePdf",
+      deepseek_deepthink_on: "webchatDeepThinkOn",
+      deepseek_deepthink_off: "webchatDeepThinkOff",
+      chatgpt_fast_mode: "webchatChatGptFastMode",
+      chatgpt_deep_mode: "webchatChatGptDeepMode",
       submitted: "webchatSubmitted",
       waiting_for_first_token: "webchatWaitingFirstToken",
       waiting_for_completion: "webchatWaitingCompletion"

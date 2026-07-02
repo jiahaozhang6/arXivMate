@@ -79,7 +79,7 @@ const NUMERIC_FIELD_CONFIG = {
     max: (profile) => getModelOutputTokenLimit(profile?.model),
     step: 1,
     rangeStep: 1,
-    fallback: 1600,
+    fallback: (profile) => getModelOutputTokenLimit(profile?.model),
     integer: true
   },
   inputTokenCap: {
@@ -213,7 +213,10 @@ async function saveCurrentSettings() {
 function renderProfiles() {
   if (!profiles.length) {
     selectedProfileId = "";
-    profilesNode.innerHTML = renderEmptyProfiles();
+    profilesNode.innerHTML = `
+      ${renderSetupGuide()}
+      ${renderEmptyProfiles()}
+    `;
     return;
   }
   if (!profiles.some((profile) => profile.id === selectedProfileId)) {
@@ -222,6 +225,7 @@ function renderProfiles() {
 
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) || profiles[0];
   profilesNode.innerHTML = `
+    ${renderSetupGuide()}
     <div class="profile-manager">
       <aside class="profile-list" aria-label="${escapeAttr(t("profileList"))}">
         ${profiles.map((profile) => renderProfileListItem(profile)).join("")}
@@ -270,6 +274,81 @@ function renderEmptyProfiles() {
   `;
 }
 
+function renderSetupGuide() {
+  const steps = [
+    t("setupGuideProvider"),
+    t("setupGuideCredentials"),
+    t("setupGuideModel"),
+    t("setupGuideTestSave")
+  ];
+  return `
+    <section class="setup-guide">
+      <strong>${escapeHtml(t("setupGuideTitle"))}</strong>
+      <ol>
+        ${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
+      </ol>
+    </section>
+  `;
+}
+
+function renderProfileChecklist(profile) {
+  const isWebChat = isWebChatProvider(profile.provider);
+  const hasProvider = Boolean(profile.provider);
+  const hasCredentials = isWebChat
+    || profile.provider === "ollama"
+    || (Boolean(String(profile.baseUrl || "").trim()) && Boolean(String(profile.apiKey || "").trim()));
+  const hasModel = Boolean(String(profile.model || "").trim());
+  const credentialText = isWebChat
+    ? `${t("checkCredentialReady")} · ${t("webchatNoApiKey")}`
+    : t("checkCredentialReady");
+  const checks = [
+    { ok: hasProvider, text: t("checkProviderReady", { provider: providerDisplayName(profile.provider) }) },
+    { ok: hasCredentials, text: credentialText },
+    { ok: hasModel, text: t("checkModelReady") },
+    { ok: hasProvider && hasModel, text: t("checkTestReady") }
+  ];
+  return `
+    <section class="profile-checklist" aria-label="${escapeAttr(t("profileChecklist"))}">
+      <strong>${escapeHtml(t("profileChecklist"))}</strong>
+      <div>
+        ${checks.map((check) => `
+          <span class="${check.ok ? "is-ok" : "is-missing"}">
+            <b aria-hidden="true">${check.ok ? "OK" : "!"}</b>
+            ${escapeHtml(check.text)}
+          </span>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderProviderNotice(profile) {
+  if (isWebChatProvider(profile.provider)) {
+    return renderWebChatLoginNotice(profile);
+  }
+  return `
+    <section class="provider-notice">
+      <strong>${escapeHtml(providerDisplayName(profile.provider))}</strong>
+      <p>${escapeHtml(t("providerNoticeApi", { provider: providerDisplayName(profile.provider) }))}</p>
+    </section>
+  `;
+}
+
+function renderWebChatLoginNotice(profile) {
+  const provider = profile.provider;
+  const label = providerDisplayName(provider);
+  return `
+    <section class="provider-notice webchat-login-notice">
+      <div>
+        <strong>${escapeHtml(t("webchatLoginTitle", { provider: label }))}</strong>
+        <p>${escapeHtml(t("webchatLoginBody", { provider: label }))}</p>
+        <small>${escapeHtml(t("webchatNoApiKey"))}</small>
+      </div>
+      <button type="button" data-action="open-webchat" data-provider="${escapeAttr(provider)}">${escapeHtml(t("openWebChatPage", { provider: label }))}</button>
+    </section>
+  `;
+}
+
 function renderProfileEditor(profile) {
   const isWebChat = isWebChatProvider(profile.provider);
   return `
@@ -284,6 +363,8 @@ function renderProfileEditor(profile) {
         <button type="button" class="danger" data-action="remove">${escapeHtml(t("remove"))}</button>
       </div>
     </header>
+    ${renderProfileChecklist(profile)}
+    ${renderProviderNotice(profile)}
 
     <section class="profile-section">
       <h3>${escapeHtml(t("connectionSettings"))}</h3>
@@ -603,6 +684,11 @@ function handleProfileInput(event) {
 function handleProfileAction(event) {
   const action = event.currentTarget.dataset.action;
   const id = event.currentTarget.dataset.id || event.currentTarget.closest(".profile-editor")?.dataset.id;
+  if (action === "open-webchat") {
+    const profile = profiles.find((item) => item.id === id);
+    openWebChatPage(profile?.provider || event.currentTarget.dataset.provider);
+    return;
+  }
   if (action === "select") {
     readSelectedProfileFromDom();
     selectedProfileId = id;
@@ -857,16 +943,17 @@ function normalizeProfiles(value, fallbackSettings) {
         ? profile.provider
         : (inferredProvider !== "custom" ? inferredProvider : (profile.provider || "custom"));
       const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
+      const model = profile.model || preset.model || "";
       return normalizeProfileNumbers({
         id: profile.id || createId(),
         name: profile.name || profile.model || "Model",
         provider,
         baseUrl: profile.baseUrl || preset.baseUrl || "",
         apiKey: isWebChatProvider(provider) ? "" : (profile.apiKey || ""),
-        model: profile.model || preset.model || "",
+        model,
         temperature: Number(profile.temperature ?? 0.2),
-        maxOutputTokens: Number(profile.maxOutputTokens ?? 1600),
-        inputTokenCap: Number(profile.inputTokenCap ?? inferInputTokenCap(profile.model)),
+        maxOutputTokens: normalizeProfileMaxOutputTokens(profile.maxOutputTokens, model, provider),
+        inputTokenCap: Number(profile.inputTokenCap ?? inferInputTokenCap(model)),
         maxContextChars: Number(profile.maxContextChars ?? 14000),
         historyTurns: Number(profile.historyTurns ?? 4),
         historyMessageChars: Number(profile.historyMessageChars ?? 1800),
@@ -880,16 +967,17 @@ function normalizeProfiles(value, fallbackSettings) {
   const hasLegacyConfig = Boolean(fallbackSettings?.baseUrl || fallbackSettings?.apiKey || fallbackSettings?.model);
   if (!hasLegacyConfig) return [];
   const inferredProvider = inferProvider(fallbackSettings.baseUrl);
+  const model = fallbackSettings.model || "";
   return [normalizeProfileNumbers({
     id: "profile-migrated",
     name: "Migrated model",
     provider: inferredProvider !== "custom" ? inferredProvider : (fallbackSettings.provider || "custom"),
     baseUrl: fallbackSettings.baseUrl || "",
     apiKey: fallbackSettings.apiKey || "",
-    model: fallbackSettings.model || "",
+    model,
     temperature: Number(fallbackSettings.temperature ?? 0.2),
-    maxOutputTokens: Number(fallbackSettings.maxOutputTokens ?? 1600),
-    inputTokenCap: Number(fallbackSettings.inputTokenCap ?? inferInputTokenCap(fallbackSettings.model)),
+    maxOutputTokens: normalizeProfileMaxOutputTokens(fallbackSettings.maxOutputTokens, model, inferredProvider),
+    inputTokenCap: Number(fallbackSettings.inputTokenCap ?? inferInputTokenCap(model)),
     maxContextChars: Number(fallbackSettings.maxContextChars ?? 14000),
     historyTurns: Number(fallbackSettings.historyTurns ?? 4),
     historyMessageChars: Number(fallbackSettings.historyMessageChars ?? 1800),
@@ -903,15 +991,16 @@ function normalizeProfiles(value, fallbackSettings) {
 function createProfile(provider) {
   const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
   const isWebChat = isWebChatProvider(provider);
+  const model = preset.model || "";
   return normalizeProfileNumbers({
     id: createId(),
     name: providerDisplayName(provider),
     provider,
     baseUrl: preset.baseUrl,
     apiKey: "",
-    model: preset.model,
+    model,
     temperature: 0.2,
-    maxOutputTokens: provider === "ollama" ? 1200 : provider === "deepseek" || provider === "minimax" ? 1800 : 1600,
+    maxOutputTokens: getModelOutputTokenLimit(model),
     inputTokenCap: isWebChat ? 64000 : provider === "deepseek" || provider === "minimax" ? 128000 : provider === "ollama" ? 16000 : 32000,
     maxContextChars: isWebChat ? 18000 : provider === "ollama" ? 12000 : 14000,
     historyTurns: provider === "ollama" ? 3 : 4,
@@ -921,6 +1010,23 @@ function createProfile(provider) {
     reasoningLevel: defaultReasoningLevel(provider, preset.model),
     useAr5iv: true
   });
+}
+
+function normalizeProfileMaxOutputTokens(value, model, provider) {
+  const limit = getModelOutputTokenLimit(model);
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 128 || isOldDefaultMaxOutputTokens(parsed, provider)) {
+    return limit;
+  }
+  return Math.min(parsed, limit);
+}
+
+function isOldDefaultMaxOutputTokens(value, provider) {
+  const parsed = Math.floor(Number(value));
+  if (parsed === 1600) return true;
+  if (provider === "ollama" && parsed === 1200) return true;
+  if ((provider === "deepseek" || provider === "minimax") && parsed === 1800) return true;
+  return false;
 }
 
 function renderAddProfileProviderOptions() {
@@ -1237,6 +1343,15 @@ function inferProvider(baseUrl) {
 
 function isWebChatProvider(provider) {
   return provider === "webchatChatGPT" || provider === "webchatDeepSeek";
+}
+
+function openWebChatPage(provider) {
+  const url = provider === "webchatDeepSeek" ? "https://chat.deepseek.com/" : "https://chatgpt.com/";
+  if (typeof chrome !== "undefined" && chrome.tabs?.create) {
+    chrome.tabs.create({ url });
+    return;
+  }
+  window.open(url, "_blank", "noopener");
 }
 
 function extractProviderHost(baseUrl) {

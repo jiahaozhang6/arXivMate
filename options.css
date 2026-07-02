@@ -380,6 +380,38 @@ small {
   gap: 14px;
 }
 
+.setup-guide {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 14px;
+}
+
+.setup-guide strong,
+.profile-checklist strong,
+.provider-notice strong {
+  color: var(--accent-strong);
+  font-size: 14px;
+}
+
+.setup-guide ol {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.setup-guide li {
+  min-width: 0;
+  padding-right: 6px;
+}
+
 .profile-manager {
   display: grid;
   grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr);
@@ -505,6 +537,80 @@ small {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.profile-checklist {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.profile-checklist div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.profile-checklist span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.profile-checklist b {
+  flex: 0 0 auto;
+  color: var(--accent-strong);
+  font-size: 11px;
+}
+
+.profile-checklist .is-missing {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.profile-checklist .is-missing b {
+  color: var(--error);
+}
+
+.provider-notice {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.provider-notice p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.webchat-login-notice {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border-color: var(--accent);
+  background: var(--control);
+}
+
+.webchat-login-notice small {
+  display: block;
+  margin-top: 4px;
+}
+
+.webchat-login-notice button {
+  white-space: nowrap;
 }
 
 .profile-section {
@@ -683,9 +789,14 @@ ul {
   }
 
   .section-head,
-  .profile-editor-header {
+  .profile-editor-header,
+  .webchat-login-notice {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .setup-guide ol {
+    grid-template-columns: 1fr;
   }
 
   .add-profile-controls,
@@ -703,6 +814,10 @@ ul {
   }
 
   .profile-manager {
+    grid-template-columns: 1fr;
+  }
+
+  .webchat-login-notice {
     grid-template-columns: 1fr;
   }
 

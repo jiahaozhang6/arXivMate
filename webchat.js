@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const BRIDGE_VERSION = 13;
+  const BRIDGE_VERSION = 15;
   if (window.__arxivMateWebChatBridgeInstalled >= BRIDGE_VERSION) return;
   window.__arxivMateWebChatBridgeInstalled = BRIDGE_VERSION;
 
@@ -1389,6 +1389,350 @@
     return best;
   }
 
+  function shouldUseDeepSeekDeepThink(mode) {
+    mode = String(mode || "").trim().toLowerCase();
+    if (mode === "quick") return false;
+    if (mode === "deep") return true;
+    if (mode === "ask") return true;
+    if (mode === "study") return true;
+    return false;
+  }
+
+  async function setDeepSeekDeepThinkMode(enabled) {
+    if (currentSite()?.id !== "deepseek") {
+      return { ok: false, reason: "not_deepseek" };
+    }
+    const button = findDeepSeekDeepThinkButton();
+    if (!button) {
+      return { ok: false, reason: "deepthink_button_not_found" };
+    }
+    const before = readDeepSeekDeepThinkState(button);
+    if (before === enabled) {
+      return { ok: true, changed: false, enabled: before, state: "already_set", control: describeControl(button) };
+    }
+    if (before === null && !shouldClickUnknownDeepSeekDeepThinkState(enabled, button)) {
+      return { ok: false, changed: false, enabled: null, state: "unknown_state_not_clicked", control: describeControl(button) };
+    }
+    dispatchPointerClick(button);
+    await sleep(450);
+    const afterButton = findDeepSeekDeepThinkButton() || button;
+    const after = readDeepSeekDeepThinkState(afterButton);
+    return {
+      ok: after === enabled || (after === null && enabled === true),
+      changed: true,
+      enabled: after,
+      state: after === null ? "unknown_after_click" : "updated",
+      control: describeControl(afterButton)
+    };
+  }
+
+  function findDeepSeekDeepThinkButton(composer = findComposer()) {
+    const container = findComposerContainer(composer);
+    const roots = [container, composer?.closest?.("form"), document.body].filter(Boolean);
+    const seen = new Set();
+    let best = null;
+    let bestScore = -Infinity;
+    for (const root of roots) {
+      for (const node of Array.from(root.querySelectorAll([
+        "button",
+        '[role="button"]',
+        '[aria-pressed]',
+        '[class*="ds-toggle-button" i]',
+        "div.ds-icon-button",
+        '[class*="ds-button" i]',
+        '[aria-label*="DeepThink" i]',
+        '[aria-label*="深度思考" i]',
+        '[title*="DeepThink" i]',
+        '[title*="深度思考" i]'
+      ].join(", ")))) {
+        const control = node.closest?.('button, [role="button"], [class*="ds-toggle-button" i], div.ds-icon-button, [class*="ds-button" i], [aria-pressed]') || node;
+        if (!(control instanceof Element) || seen.has(control) || !isVisible(control)) continue;
+        seen.add(control);
+        const label = getControlIdentity(control);
+        const directText = normalizeText(control.innerText || control.textContent || "");
+        if (!looksLikeDeepSeekDeepThinkControl(label)) continue;
+        const rect = control.getBoundingClientRect?.();
+        if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+        let score = 0;
+        if (directText === "深度思考") score += 2000;
+        if (/^deep\s*think$/i.test(directText)) score += 2000;
+        if (/\bds-toggle-button\b/.test(label)) score += 900;
+        if (/deep\s*think|deepthink/i.test(label)) score += 1200;
+        if (/深度思考|深度推理/.test(label)) score += 1200;
+        if (/\br1\b|reasoner|reasoning|推理/.test(label)) score += 250;
+        if (/搜索|联网|search|upload|attach|file|send|发送|附件|上传/.test(label)) score -= 700;
+        if (/智能搜索/.test(label) && !/^深度思考$/.test(directText)) score -= 900;
+        if (rect.width <= 260 && rect.height <= 80) score += 160;
+        const composerRect = composer?.getBoundingClientRect?.() || null;
+        if (composerRect) {
+          const centerY = rect.top + rect.height / 2;
+          const nearComposer = centerY >= composerRect.top - 120 && centerY <= composerRect.bottom + 120;
+          score += nearComposer ? 250 : -250;
+        }
+        if (score > bestScore) {
+          best = control;
+          bestScore = score;
+        }
+      }
+    }
+    return best;
+  }
+
+  function looksLikeDeepSeekDeepThinkControl(label) {
+    const value = String(label || "").toLowerCase();
+    if (!/(deep\s*think|deepthink|深度思考|深度推理|\br1\b|reasoner|reasoning)/i.test(value)) return false;
+    if (/搜索|联网|search/.test(value) && !/(deep\s*think|deepthink|深度思考|深度推理)/i.test(value)) return false;
+    return true;
+  }
+
+  function shouldClickUnknownDeepSeekDeepThinkState(enabled, control) {
+    if (!(control instanceof Element)) return false;
+    const label = getControlIdentity(control);
+    if (!looksLikeDeepSeekDeepThinkControl(label)) return false;
+    return enabled === true || enabled === false;
+  }
+
+  function readDeepSeekDeepThinkState(control) {
+    if (!(control instanceof Element)) return null;
+    const target = control.closest?.('[class*="ds-toggle-button" i], button, [role="button"], [aria-pressed]') || control;
+    const values = [
+      control.getAttribute("aria-pressed"),
+      control.getAttribute("aria-checked"),
+      control.getAttribute("data-state"),
+      control.getAttribute("data-active"),
+      control.getAttribute("data-selected"),
+      control.getAttribute("data-checked"),
+      target.getAttribute?.("aria-pressed"),
+      target.getAttribute?.("aria-checked"),
+      target.getAttribute?.("data-state"),
+      target.getAttribute?.("data-active"),
+      target.getAttribute?.("data-selected"),
+      target.getAttribute?.("data-checked")
+    ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+    if (values.some((value) => /^(true|checked|on|active|selected|enabled)$/i.test(value))) return true;
+    if (values.some((value) => /^(false|unchecked|off|inactive|unselected|disabled)$/i.test(value))) return false;
+
+    const label = getControlIdentity(control);
+    if (/关闭(?:深度思考|deep\s*think)|disable\s+deep\s*think|turn\s+off\s+deep\s*think|已开启|已打开/i.test(label)) return true;
+    if (/开启(?:深度思考|deep\s*think)|打开(?:深度思考|deep\s*think)|enable\s+deep\s*think|turn\s+on\s+deep\s*think/i.test(label)) return false;
+
+    const classText = String([
+      control.getAttribute?.("class") || control.className || "",
+      target.getAttribute?.("class") || target.className || ""
+    ].join(" ")).toLowerCase();
+    if (/\b(is-)?(active|selected|checked|pressed|on)\b|--active\b|--selected\b|--checked\b/.test(classText)) return true;
+    if (/\b(inactive|unselected|unchecked|off)\b|--inactive\b/.test(classText)) return false;
+    return null;
+  }
+
+  function getControlIdentity(control) {
+    if (!(control instanceof Element)) return "";
+    return normalizeText([
+      control.innerText || control.textContent || "",
+      control.getAttribute("aria-label") || "",
+      control.getAttribute("title") || "",
+      control.getAttribute("data-testid") || "",
+      control.getAttribute("data-state") || "",
+      control.getAttribute("class") || ""
+    ].join(" ")).toLowerCase();
+  }
+
+  function chatGptTargetComposerMode(mode) {
+    mode = String(mode || "").trim().toLowerCase();
+    if (mode === "quick") return "极速";
+    if (mode === "deep") return "高级";
+    if (mode === "ask") return "高级";
+    if (mode === "study") return "高级";
+    return "";
+  }
+
+  async function setChatGptComposerMode(targetLabel) {
+    if (currentSite()?.id !== "chatgpt") {
+      return { ok: false, reason: "not_chatgpt" };
+    }
+    const target = normalizeText(targetLabel);
+    if (!target) return { ok: false, reason: "empty_target" };
+    const button = findChatGptComposerModeButton();
+    if (!button) {
+      return { ok: false, reason: "composer_mode_button_not_found", menu: chatGptComposerModeMenuLabels() };
+    }
+    const before = readChatGptComposerModeLabel(button);
+    if (before === target) {
+      return { ok: true, changed: false, selected: before, state: "already_set", control: describeControl(button) };
+    }
+    if (!isChatGptComposerModeMenuOpen()) {
+      dispatchPointerClick(button);
+      await waitForChatGptComposerModeMenu(1800);
+    }
+    const item = findChatGptComposerModeItem(target);
+    if (!item) {
+      return {
+        ok: false,
+        reason: "composer_mode_item_not_found",
+        target,
+        selected: before,
+        menu: chatGptComposerModeMenuLabels(),
+        control: describeControl(button)
+      };
+    }
+    if (!readChatGptComposerModeItemChecked(item)) {
+      dispatchPointerClick(item);
+      await sleep(500);
+    }
+    const afterButton = findChatGptComposerModeButton() || button;
+    const after = readChatGptComposerModeLabel(afterButton);
+    const afterItem = findChatGptComposerModeItem(target);
+    const checked = readChatGptComposerModeItemChecked(afterItem);
+    return {
+      ok: after === target || checked,
+      changed: true,
+      selected: after || (checked ? target : ""),
+      target,
+      state: after === target || checked ? "updated" : "not_verified",
+      control: describeControl(afterButton),
+      menu: chatGptComposerModeMenuLabels()
+    };
+  }
+
+  function findChatGptComposerModeButton(composer = findComposer()) {
+    const container = findComposerContainer(composer);
+    const roots = [container, composer?.closest?.("form"), document.body].filter(Boolean);
+    const seen = new Set();
+    let best = null;
+    let bestScore = -Infinity;
+    const composerRect = composer?.getBoundingClientRect?.() || null;
+    for (const root of roots) {
+      for (const node of Array.from(root.querySelectorAll("button, [role='button']"))) {
+        if (!(node instanceof Element) || seen.has(node) || !isVisible(node)) continue;
+        seen.add(node);
+        if (node.closest?.('[role="menu"], [data-testid="composer-intelligence-picker-content"]')) continue;
+        const label = readChatGptComposerModeLabel(node);
+        if (!label) continue;
+        const rect = node.getBoundingClientRect?.();
+        if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+        let score = 0;
+        if (/^(极速|均衡|高级|智能)$/.test(label)) score += 1200;
+        const identity = normalizeText([
+          node.getAttribute("aria-label"),
+          node.getAttribute("title"),
+          node.getAttribute("data-testid"),
+          node.getAttribute("class")
+        ].join(" ")).toLowerCase();
+        if (/composer|intelligence|model|picker|pill/.test(identity)) score += 800;
+        if (node.getAttribute("aria-haspopup") === "menu" || node.getAttribute("aria-expanded") != null) score += 500;
+        if (rect.width <= 180 && rect.height <= 64) score += 180;
+        if (composerRect) {
+          const centerY = rect.top + rect.height / 2;
+          const nearComposer = centerY >= composerRect.top - 160 && centerY <= composerRect.bottom + 120;
+          score += nearComposer ? 350 : -450;
+        }
+        if (score > bestScore) {
+          best = node;
+          bestScore = score;
+        }
+      }
+    }
+    return best;
+  }
+
+  function readChatGptComposerModeLabel(node) {
+    if (!(node instanceof Element)) return "";
+    const text = normalizeText([
+      node.innerText || node.textContent || "",
+      node.getAttribute("aria-label") || "",
+      node.getAttribute("title") || ""
+    ].join(" "));
+    const match = text.match(/智能|极速|均衡|高级/);
+    return match ? match[0] : "";
+  }
+
+  function isChatGptComposerModeMenuOpen() {
+    return Boolean(findChatGptComposerModeMenuRoot());
+  }
+
+  async function waitForChatGptComposerModeMenu(timeoutMs = 1500) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (findChatGptComposerModeMenuRoot()) return true;
+      await sleep(100);
+    }
+    return false;
+  }
+
+  function findChatGptComposerModeMenuRoot() {
+    const selectors = [
+      '[data-testid="composer-intelligence-picker-content"]',
+      '[role="menu"]',
+      "[data-radix-popper-content-wrapper]"
+    ];
+    for (const selector of selectors) {
+      const candidates = Array.from(document.querySelectorAll(selector))
+        .filter((node) => node instanceof Element && isVisible(node));
+      const root = candidates.find((node) => /智能|极速|均衡|高级/.test(normalizeText(node.innerText || node.textContent || "")));
+      if (root) return root;
+    }
+    return null;
+  }
+
+  function findChatGptComposerModeItem(targetLabel) {
+    const target = normalizeText(targetLabel);
+    const roots = [findChatGptComposerModeMenuRoot(), document.body].filter(Boolean);
+    const seen = new Set();
+    for (const root of roots) {
+      const candidates = Array.from(root.querySelectorAll([
+        '[role="menuitemradio"]',
+        '[role="menuitem"]',
+        "button",
+        "[data-testid]"
+      ].join(", "))).filter((node) => node instanceof Element && isVisible(node));
+      for (const node of candidates) {
+        if (seen.has(node)) continue;
+        seen.add(node);
+        const label = readChatGptComposerModeLabel(node);
+        if (label === target) return node;
+      }
+    }
+    return null;
+  }
+
+  function readChatGptComposerModeItemChecked(item) {
+    if (!(item instanceof Element)) return false;
+    const values = [
+      item.getAttribute("aria-checked"),
+      item.getAttribute("data-state"),
+      item.getAttribute("data-checked"),
+      item.getAttribute("data-selected")
+    ].map((value) => String(value || "").trim().toLowerCase());
+    return values.some((value) => /^(true|checked|selected|on)$/.test(value));
+  }
+
+  function chatGptComposerModeMenuLabels() {
+    const root = findChatGptComposerModeMenuRoot();
+    if (!root) return [];
+    return Array.from(root.querySelectorAll('[role="menuitemradio"], [role="menuitem"], button, [data-testid]'))
+      .map(readChatGptComposerModeLabel)
+      .filter(Boolean)
+      .filter((label, index, labels) => labels.indexOf(label) === index);
+  }
+
+  async function ensureChatGptComposerModeForPaperMode(port, site, payload) {
+    if (site?.id !== "chatgpt") return "";
+    const chatGptMode = chatGptTargetComposerMode(payload.webchatMode);
+    if (!chatGptMode) return "";
+    const phase = chatGptMode === "极速" ? "chatgpt_fast_mode" : "chatgpt_deep_mode";
+    const chatGptModeResult = await setChatGptComposerMode(chatGptMode).catch((error) => ({
+      ok: false,
+      error: error?.message || String(error)
+    }));
+    post(port, {
+      type: "phase",
+      phase,
+      site: site.id,
+      diagnostic: chatGptModeResult
+    });
+    return phase;
+  }
+
   function looksLikeDeepSeekSendIcon(pathText) {
     const value = String(pathText || "");
     const hints = [
@@ -2607,6 +2951,20 @@
     }, 10000);
 
     let composer = null;
+    if (site.id === "deepseek") {
+      const deepThinkEnabled = shouldUseDeepSeekDeepThink(payload.webchatMode);
+      currentPhase = deepThinkEnabled ? "deepseek_deepthink_on" : "deepseek_deepthink_off";
+      const deepThinkResult = await setDeepSeekDeepThinkMode(deepThinkEnabled).catch((error) => ({
+        ok: false,
+        error: error?.message || String(error)
+      }));
+      post(port, {
+        type: "phase",
+        phase: currentPhase,
+        site: site.id,
+        diagnostic: deepThinkResult
+      });
+    }
     const shouldWritePromptBeforePdf = site.id === "deepseek" && payload.pdfBase64;
 
     if (shouldWritePromptBeforePdf) {
@@ -2652,6 +3010,8 @@
         attachmentState: pdfAttachmentState
       });
     }
+
+    currentPhase = await ensureChatGptComposerModeForPaperMode(port, site, payload) || currentPhase;
 
     if (shouldWritePromptBeforePdf || !composerTextMatches(prompt, readComposerText(composer))) {
       currentPhase = "prompt_applying";
@@ -2733,28 +3093,10 @@
       const canFinishWithCurrentText = !(site.id === "chatgpt" && chatGptPreludeOnly);
       const chatGptQuietMs = chatGptPdfTurn ? 15000 : 8000;
       const deepSeekQuietDone = site.id === "deepseek" && lastText && !activeStreamCount && !uploadBusy && quietFor >= 1500;
-      const deepSeekThinkingOnlyDone = site.id === "deepseek" && lastThinking && !lastText && !activeStreamCount && !uploadBusy && quietFor >= 5000;
       const chatGptActionDone = site.id === "chatgpt" && actionBarVisible && lastText && !chatGptPreludeOnly && !stopVisible && !uploadBusy;
       const chatGptDomQuietDone = site.id === "chatgpt" && lastText && !chatGptPreludeOnly && !stopVisible && !uploadBusy && !activeStreamCount && quietFor >= chatGptQuietMs;
       const mayFinishFromDomOnly = !transportObserved && quietFor >= domOnlyQuietMs;
       const mayFinishFromQuietFallback = transportObserved && !activeStreamCount && !sseDone && quietFor >= 90000;
-      if (deepSeekThinkingOnlyDone && !stopVisible && hasWaitedForFirstAnswerMs) {
-        const chatUrl = await waitForCurrentChatUrl();
-        const finalCandidate = getFinalAssistantCandidate(baseline, { text: lastText || sseText, thinking: lastThinking || sseThinking });
-        postTerminal(port, state, {
-          text: finalCandidate.text || "",
-          thinking: finalCandidate.thinking || null,
-          runState: "incomplete",
-          completionReason: "settled",
-          chatUrl,
-          chatId: getCurrentChatId(chatUrl),
-          pdfAttached,
-          pdfFilename,
-          pdfSize,
-          attachmentState: pdfAttachmentState
-        });
-        return;
-      }
       if (lastText && canFinishWithCurrentText && !stopVisible && hasWaitedForFirstAnswerMs && (chatGptActionDone || chatGptDomQuietDone || deepSeekQuietDone || sseSettled || mayFinishFromDomOnly || mayFinishFromQuietFallback)) {
         const chatUrl = await waitForCurrentChatUrl();
         const finalCandidate = getFinalAssistantCandidate(baseline, { text: lastText, thinking: lastThinking || sseThinking });

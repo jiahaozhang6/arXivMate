@@ -6,7 +6,7 @@ const DEFAULT_SETTINGS = {
 const DEFAULT_PROFILE_SETTINGS = {
   temperature: 0.2,
   maxContextChars: 14000,
-  maxOutputTokens: 1600,
+  maxOutputTokens: 8192,
   inputTokenCap: 32000,
   historyTurns: 4,
   historyMessageChars: 1800,
@@ -32,7 +32,7 @@ const MODEL_PROFILES_LOCAL_KEY = "modelProfiles";
 const BACKUP_FORMAT = "arXivMate.localData";
 const BACKUP_VERSION = 1;
 const WEBCHAT_PDF_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
-const WEBCHAT_BRIDGE_VERSION = 13;
+const WEBCHAT_BRIDGE_VERSION = 15;
 
 const PROVIDER_PRESETS = {
   openai: {
@@ -756,7 +756,7 @@ async function summarizePaper({
     webchatSession
   });
   const result = isWebChatProvider(prepared.settings.provider)
-    ? await callWebChat(prepared.settings, prepared.messages, prepared.webchatPdf, prepared.normalizedPaper, prepared.webchatSession)
+    ? await callWebChat(prepared.settings, prepared.messages, prepared.webchatPdf, prepared.normalizedPaper, prepared.webchatSession, prepared.mode)
     : await callChatCompletions(prepared.settings, prepared.messages);
   return finishSummarizePaper(prepared, result);
 }
@@ -792,6 +792,7 @@ async function streamSummarizePaper(message, port, signal) {
       prepared.webchatPdf,
       prepared.normalizedPaper,
       prepared.webchatSession,
+      prepared.mode,
       (fullText) => {
         streamed = fullText;
         postPort(port, { type: "delta", text: fullText, fullText: streamed });
@@ -959,15 +960,15 @@ async function callChatCompletionsStream(settings, messages, onDelta, signal) {
   return cleaned;
 }
 
-async function callWebChat(settings, messages, webchatPdf = null, paper = null, webchatSession = null) {
+async function callWebChat(settings, messages, webchatPdf = null, paper = null, webchatSession = null, webchatMode = "quick") {
   let latest = "";
-  const result = await callWebChatStream(settings, messages, webchatPdf, paper, webchatSession, (text) => {
+  const result = await callWebChatStream(settings, messages, webchatPdf, paper, webchatSession, webchatMode, (text) => {
     latest = text || latest;
   });
   return result || latest;
 }
 
-async function callWebChatStream(settings, messages, webchatPdf, paper, webchatSession, onDelta, signal, onStatus) {
+async function callWebChatStream(settings, messages, webchatPdf, paper, webchatSession, webchatMode, onDelta, signal, onStatus) {
   const webchat = getWebChatConfig(settings.provider);
   if (!webchatSession?.pdfAttached && !webchatPdf?.base64) {
     throw new Error(`${webchat.label} 首次分析当前论文必须先准备可上传的 PDF 文件；未检测到已验证的网页附件会话，也没有可上传 PDF。`);
@@ -1114,6 +1115,7 @@ async function callWebChatStream(settings, messages, webchatPdf, paper, webchatS
         pdfBase64: webchatPdf?.base64 || "",
         pdfFilename: webchatPdf?.filename || "",
         pdfSize: webchatPdf?.size || 0,
+        webchatMode,
         timeoutMs: 120 * 60 * 1000
       });
     } catch (error) {
@@ -2670,7 +2672,9 @@ function normalizeWebChatPdf(value) {
     base64,
     filename: sanitizePdfFilename(value.filename || "paper.pdf"),
     size: Number(value.size) || 0,
-    url: normalizeString(value.url)
+    url: normalizeString(value.url),
+    generated: value.generated === true,
+    source: normalizeString(value.source)
   };
 }
 
@@ -2784,7 +2788,7 @@ function normalizeModelProfile(profile) {
     model,
     temperature,
     maxContextChars,
-    maxOutputTokens: normalizeMaxOutputTokens(profile.maxOutputTokens, model),
+    maxOutputTokens: normalizeProfileMaxOutputTokens(profile.maxOutputTokens, model, provider),
     inputTokenCap: normalizeInputTokenCap(profile.inputTokenCap, model),
     historyTurns: normalizeHistoryTurns(profile.historyTurns),
     historyMessageChars: normalizeHistoryMessageChars(profile.historyMessageChars),
@@ -2850,9 +2854,26 @@ function normalizeMaxContextChars(value) {
 
 function normalizeMaxOutputTokens(value, model) {
   const parsed = Math.floor(Number(value));
-  const fallback = DEFAULT_PROFILE_SETTINGS.maxOutputTokens;
+  const fallback = getModelOutputTokenLimit(model);
   if (!Number.isFinite(parsed) || parsed < 128) return fallback;
   return Math.min(parsed, getModelOutputTokenLimit(model));
+}
+
+function normalizeProfileMaxOutputTokens(value, model, provider) {
+  const limit = getModelOutputTokenLimit(model);
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 128 || isOldDefaultMaxOutputTokens(parsed, provider)) {
+    return limit;
+  }
+  return Math.min(parsed, limit);
+}
+
+function isOldDefaultMaxOutputTokens(value, provider) {
+  const parsed = Math.floor(Number(value));
+  if (parsed === 1600) return true;
+  if (provider === "ollama" && parsed === 1200) return true;
+  if ((provider === "deepseek" || provider === "minimax") && parsed === 1800) return true;
+  return false;
 }
 
 function normalizeInputTokenCap(value, model) {

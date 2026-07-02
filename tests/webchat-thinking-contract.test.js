@@ -32,5 +32,11 @@ const background = read("background.js");
 const webchat = read("webchat.js");
 assert.match(webchat, /lastThinkingLength/, "WebChat heartbeat should include thinking text length");
 assert.match(background, /lastThinkingLength/, "background should forward thinking text length");
+assert.doesNotMatch(webchat, /deepSeekThinkingOnlyDone/, "DeepSeek must not finish a normal turn with thinking-only content");
+assert.doesNotMatch(
+  webchat,
+  /site\.id === "deepseek"[^;]+lastThinking[^;]+!lastText[^;]+postTerminal/s,
+  "DeepSeek thinking-only updates should keep waiting for the final answer instead of posting a terminal result"
+);
 
 console.log("webchat thinking contract ok");

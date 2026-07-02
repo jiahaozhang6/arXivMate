@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.18 - 2026-07-02
+
+Browser/site support, WebChat stability, and README restructure release.
+
+- Rewrite the README so GitHub visitors first see supported browsers, supported paper sites, WebChat sites, installation, update, data, and privacy notes.
+- Document Chrome, Microsoft Edge, Brave, Arc, other Chromium browsers, and current Firefox limitations.
+- Document arXiv, ACM Digital Library, IEEE Xplore, regular/dynamic PDFs, common publisher PDF entry points, and local PDF support.
+- Fix ChatGPT Web quick overview mode by switching to fast mode after PDF upload, avoiding ChatGPT resetting the picker back to advanced mode.
+- Fix DeepSeek Web quick overview by reliably disabling deep thinking on the real `ds-toggle-button` control.
+- Fix DeepSeek Web response capture so thinking-only updates no longer end a normal turn before the final answer arrives.
+- Bump the WebChat bridge to v15 so already-open ChatGPT and DeepSeek tabs load the latest adapter.
+
 ## 0.1.17 - 2026-07-01
 
 Chat navigation and WebChat thinking-status release.
