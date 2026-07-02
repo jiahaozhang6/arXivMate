@@ -31,6 +31,12 @@ arXivMate 是一个本地优先的论文阅读浏览器扩展。打开论文或 
 - 读取 Zotero 分类，保存论文条目和 PDF 附件
 - 本地数据备份和恢复
 
+## 截图
+
+![论文阅读与深读](./docs/images/paper-chat-panel.png)
+
+![模型配置](./docs/images/model-settings.png)
+
 ## 安装
 
 推荐下载稳定版：
